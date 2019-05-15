@@ -149,6 +149,33 @@ public class DMatrix {
     this.handle = handle;
   }
 
+  //START CUDF Support
+  /**
+   * Create DMatrix from cuDF.
+   *
+   * @param gdf_cols The native handles of GDF columns
+   * @throws XGBoostError native error
+   */
+  public DMatrix(long[] gdf_cols) throws XGBoostError {
+    if (gdf_cols == null) {
+      throw new NullPointerException("gdf_cols: null");
+    }
+    long[] out = new long[1];
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out));
+    handle = out[0];
+  }
+
+  /**
+   * Set CUDF information for DMatrix.
+   *
+   * @param field  The name of this info, such as "label" or "weight"
+   * @param cols   The native handles of GDF columns
+   * @throws XGBoostError native error
+   */
+  public void setCUDFInfo(String field, long[] cols) throws XGBoostError {
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixSetCUDFInfo(handle, field, cols));
+  }
+  // END CUDF Support
 
   /**
    * set label of dmatrix

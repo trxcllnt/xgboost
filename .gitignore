@@ -76,6 +76,7 @@ tags
 *.class
 target
 *.swp
+.autotools
 
 # cpp tests and gcov generated files
 *.gcov

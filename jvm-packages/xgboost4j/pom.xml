@@ -12,6 +12,9 @@
     <version>0.83-SNAPSHOT</version>
     <packaging>jar</packaging>
 
+    <properties>
+        <cuda.classifier>cuda10</cuda.classifier>
+    </properties>
     <dependencies>
         <dependency>
             <groupId>junit</groupId>
@@ -29,6 +32,19 @@
             <groupId>com.typesafe.akka</groupId>
             <artifactId>akka-testkit_${scala.binary.version}</artifactId>
             <version>2.3.11</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ai.rapids</groupId>
+            <artifactId>cudf</artifactId>
+            <version>0.7-SNAPSHOT</version>
+            <classifier>${cuda.classifier}</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.9</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
