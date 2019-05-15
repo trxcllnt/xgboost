@@ -20,6 +20,9 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#ifdef XGBOOST_USE_CUDF
+#include <cudf/types.h>
+#endif
 
 // helper functions
 // set handle
@@ -263,6 +266,68 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
   //release
   jenv->ReleaseFloatArrayElements(jdata, data, 0);
   return ret;
+}
+
+extern void XGBAPISetLastError(const char* msg);
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
+ * Method:    XGDMatrixCreateFromCUDF
+ * Signature: ([J[J)I
+ */
+JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFromCUDF
+  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout) {
+#ifdef XGBOOST_USE_CUDF
+  DMatrixHandle dhandle;
+  jsize num_cols = jenv->GetArrayLength(jcols);
+  jlong* cols = jenv->GetLongArrayElements(jcols, nullptr);
+  if (cols == nullptr) {
+    LOG(ERROR) << "XGDMatrixCreateFromCUDF: Null Columns!";
+    XGBAPISetLastError("Null columns");
+    return -1;
+  }
+  int ret = XGDMatrixCreateFromCUDF((gdf_column**)cols, (size_t)num_cols, &dhandle);
+  if (cols != nullptr) {
+    jenv->ReleaseLongArrayElements(jcols, cols, 0);
+  }
+  setHandle(jenv, jout, dhandle);
+  return ret;
+#else
+  LOG(ERROR) << "XGDMatrixCreateFromCUDF: Expect CUDF but disabled!";
+  XGBAPISetLastError("CUDF is not enabled!");
+  return -1;
+#endif
+}
+
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
+ * Method:    XGDMatrixSetCUDFInfo
+ * Signature: (JLjava/lang/String;[J)I
+ */
+JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixSetCUDFInfo
+  (JNIEnv *jenv, jclass jcls, jlong jhandle, jstring jfield, jlongArray jcols) {
+#ifdef XGBOOST_USE_CUDF
+  jsize num_cols = jenv->GetArrayLength(jcols);
+  jlong* cols = jenv->GetLongArrayElements(jcols, nullptr);
+  const char* field = jenv->GetStringUTFChars(jfield, nullptr);
+  if (cols == nullptr || field == nullptr) {
+    std::string msg = "XGDMatrixSetCUDFInfo: ";
+    LOG(ERROR) << msg.append(field == nullptr ? "Null field!" : "Null Columns!");
+    XGBAPISetLastError(msg.c_str());
+    return -1;
+  }
+  int ret = XGDMatrixSetCUDFInfo((DMatrixHandle)jhandle, field, (gdf_column**)cols, (size_t)num_cols);
+  if (field != nullptr) {
+    jenv->ReleaseStringUTFChars(jfield, field);
+  }
+  if (cols != nullptr) {
+    jenv->ReleaseLongArrayElements(jcols, cols, 0);
+  }
+  return ret;
+#else
+  LOG(ERROR) << "XGDMatrixSetCUDFInfo: Expect CUDF but disabled!";
+  XGBAPISetLastError("CUDF is not enabled!");
+  return -1;
+#endif
 }
 
 /*
