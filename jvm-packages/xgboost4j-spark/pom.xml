@@ -20,6 +20,9 @@
             </plugin>
         </plugins>
     </build>
+    <properties>
+        <cuda.classifier>cuda10</cuda.classifier>
+    </properties>
     <dependencies>
         <dependency>
             <groupId>ml.dmlc</groupId>
@@ -43,6 +46,12 @@
             <artifactId>spark-mllib_${scala.binary.version}</artifactId>
             <version>${spark.version}</version>
             <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>ai.rapids</groupId>
+            <artifactId>cudf</artifactId>
+            <version>0.7-SNAPSHOT</version>
+            <classifier>${cuda.classifier}</classifier>
         </dependency>
     </dependencies>
 </project>
