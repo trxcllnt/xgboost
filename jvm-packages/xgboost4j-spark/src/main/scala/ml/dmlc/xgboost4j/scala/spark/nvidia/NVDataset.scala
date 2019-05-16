@@ -17,8 +17,9 @@
 package ml.dmlc.xgboost4j.scala.spark.nvidia
 
 import java.io.{ByteArrayOutputStream, IOException, ObjectInputStream, ObjectOutputStream}
+import java.util.Locale
 
-import ai.rapids.cudf.{DType, Table}
+import ai.rapids.cudf.{CSVOptions, DType, Table}
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
@@ -341,16 +342,32 @@ object NVDataset {
       sparkSession: SparkSession,
       schema: StructType,
       options: Map[String, String]): PartitionedFile => Table = {
+    // Try to build CSV options on the driver here to validate and fail fast.
+    // The other CSV option build below will occur on the executors.
+    buildCsvOptions(options)
+
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
     val broadcastHadoopConf = sparkSession.sparkContext.broadcast(
       new SerializableConfiguration(hadoopConf))
+
     partFile: PartitionedFile => {
       val conf = broadcastHadoopConf.value.value
       val partFileData = readPartFileFully(partFile, conf)
       val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
       schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-      Table.readCSV(csvSchemaBuilder.build(), partFileData)
+      Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options), partFileData)
     }
+  }
+
+  private def buildCsvOptions(options: Map[String, String]): CSVOptions = {
+    val builder = CSVOptions.builder()
+    for ((k, v) <- options) {
+      val parseFunc = csvOptionParserMap.getOrElse(k, (_: CSVOptions.Builder, _: String) => {
+        throw new UnsupportedOperationException(s"CSV option $k not supported")
+      })
+      parseFunc(builder, v)
+    }
+    builder.build
   }
 
   private def readPartFileFully(partFile: PartitionedFile,
@@ -413,4 +430,73 @@ object NVDataset {
     }
   }
 
+  /**
+   * Helper method that converts string representation of a character to actual character.
+   * It handles some Java escaped strings and throws exception if given string is longer than one
+   * character.
+   */
+  @throws[IllegalArgumentException]
+  private def toChar(str: String): Char = {
+    (str: Seq[Char]) match {
+      case Seq() => throw new IllegalArgumentException("Delimiter cannot be empty string")
+      case Seq('\\') => throw new IllegalArgumentException("Single backslash is prohibited." +
+        " It has special meaning as beginning of an escape sequence." +
+        " To get the backslash character, pass a string with two backslashes as the delimiter.")
+      case Seq(c) => c
+      case Seq('\\', 't') => '\t'
+      case Seq('\\', 'r') => '\r'
+      case Seq('\\', 'b') => '\b'
+      case Seq('\\', 'f') => '\f'
+      // In case user changes quote char and uses \" as delimiter in options
+      case Seq('\\', '\"') => '\"'
+      case Seq('\\', '\'') => '\''
+      case Seq('\\', '\\') => '\\'
+      case _ if str == """\u0000""" => '\u0000'
+      case Seq('\\', _) =>
+        throw new IllegalArgumentException(s"Unsupported special character for delimiter: $str")
+      case _ =>
+        throw new IllegalArgumentException(s"Delimiter cannot be more than one character: $str")
+    }
+  }
+
+  private def getBool(paramName: String, paramVal: String): Boolean = {
+    val lowerParamVal = paramVal.toLowerCase(Locale.ROOT)
+    if (lowerParamVal == "true") {
+      true
+    } else if (lowerParamVal == "false") {
+      false
+    } else {
+      throw new Exception(s"$paramName flag can be true or false")
+    }
+  }
+
+  private def parseCSVCommentOption(b: CSVOptions.Builder, v: String): Unit = {
+    b.withComment(toChar(v))
+  }
+
+  private def parseCSVHeaderOption(b: CSVOptions.Builder, v: String): Unit = {
+    if (getBool("header", v)) {
+      b.hasHeader
+    }
+  }
+
+  private def parseCSVNullValueOption(b: CSVOptions.Builder, v: String): Unit = {
+    b.withNullValue(v)
+  }
+
+  private def parseCSVQuoteOption(b: CSVOptions.Builder, v: String): Unit = {
+    b.withQuote(toChar(v))
+  }
+
+  private def parseCSVSepOption(b: CSVOptions.Builder, v: String): Unit = {
+    b.withDelim(toChar(v))
+  }
+
+  private val csvOptionParserMap: Map[String, (CSVOptions.Builder, String) => Unit] = Map(
+    "comment" -> parseCSVCommentOption,
+    "header" -> parseCSVHeaderOption,
+    "nullValue" -> parseCSVNullValueOption,
+    "quote" -> parseCSVQuoteOption,
+    "sep" -> parseCSVSepOption
+  )
 }
