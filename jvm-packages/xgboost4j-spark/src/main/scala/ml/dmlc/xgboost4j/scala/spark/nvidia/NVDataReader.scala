@@ -141,6 +141,17 @@ class NVDataReader(sparkSession: SparkSession) {
 
   /**
     * Loads CSV files and returns the result as an `NVDataset`.
+    * You can set the following CSV-specific options to deal with CSV files:
+    * <ul>
+    * <li>`sep` (default `,`): sets a single character as a separator for each
+    * field and value.</li>
+    * <li>`quote` (default `"`): sets a single character used for escaping quoted values where
+    * the separator can be part of the value.</li>
+    * <li>`comment` (default empty string): sets a single character used for skipping lines
+    * beginning with this character. By default, it is disabled.</li>
+    * <li>`header` (default `false`): uses the first line as names of columns.</li>
+    * <li>`nullValue` (default empty string): sets the string representation of a null value.</li>
+    * </ul>
     */
   @scala.annotation.varargs
   def csv(paths: String*): NVDataset = format("csv").load(paths : _*)
