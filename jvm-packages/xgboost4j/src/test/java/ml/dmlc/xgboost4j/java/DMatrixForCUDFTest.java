@@ -15,7 +15,7 @@
  */
 package ml.dmlc.xgboost4j.java;
 
-import ai.rapids.cudf.FloatColumnVector;
+import ai.rapids.cudf.ColumnVector;
 import junit.framework.TestCase;
 import org.junit.Test;
 
@@ -31,19 +31,18 @@ public class DMatrixForCUDFTest {
   @Test
   public void testCreateFromCUDF() {
     //create Matrix from CUDF
-    FloatColumnVector featureCol = null, labelCol = null, weightCol = null;
+    ColumnVector featureCol = null, labelCol = null, weightCol = null;
     try {
-      float[] fData = new float[]{1.0f, 2.0f, 3.0f};
       float[] infoData = new float[]{5.0f, 6.0f, 7.0f};
       // feature
-      featureCol = FloatColumnVector.builder(3).append(fData[0]).append(fData[1]).append(fData[2]).build();
-      featureCol.toDeviceBuffer();
+      featureCol = ColumnVector.fromFloats(1.0f, 2.0f, 3.0f);
+      featureCol.ensureOnDevice();
       // label
-      labelCol = FloatColumnVector.builder(3).append(infoData[0]).append(infoData[1]).append(infoData[2]).build();
-      labelCol.toDeviceBuffer();
+      labelCol = ColumnVector.fromFloats(infoData);
+      labelCol.ensureOnDevice();
       // weight
-      weightCol = FloatColumnVector.builder(3).append(infoData[0]).append(infoData[1]).append(infoData[2]).build();
-      weightCol.toDeviceBuffer();
+      weightCol = ColumnVector.fromFloats(infoData);
+      weightCol.ensureOnDevice();
 
       DMatrix dmat = new DMatrix(new long[]{featureCol.getNativeCudfColumnAddress()});
       dmat.setCUDFInfo("label", new long[]{labelCol.getNativeCudfColumnAddress()});

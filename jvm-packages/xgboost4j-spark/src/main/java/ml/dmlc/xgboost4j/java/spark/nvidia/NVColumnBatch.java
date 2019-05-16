@@ -35,7 +35,7 @@ public class NVColumnBatch {
   }
 
   public long getNumRows() {
-    return table.getRows();
+    return table.getRowCount();
   }
 
   public int getNumColumns() {
