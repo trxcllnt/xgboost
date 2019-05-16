@@ -19,7 +19,7 @@ package ml.dmlc.xgboost4j.scala.spark.nvidia
 import java.io.{ByteArrayOutputStream, IOException, ObjectInputStream, ObjectOutputStream}
 import java.util.Locale
 
-import ai.rapids.cudf.{CSVOptions, DType, Table}
+import ai.rapids.cudf.{CSVOptions, DType, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
@@ -303,6 +303,7 @@ object NVDataset {
       Iterator[NVColumnBatch] with AutoCloseable = {
     val formatReader = sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options)
+      case "parquet" => getParquetPartFileReader(sparkSession, schema, options)
       case _ => throw new UnsupportedOperationException(
         s"Unsupported source type: $sourceType")
     }
@@ -359,6 +360,25 @@ object NVDataset {
     }
   }
 
+  private def getParquetPartFileReader(
+      sparkSession: SparkSession,
+      schema: StructType,
+      options: Map[String, String]): PartitionedFile => Table = {
+    // Try to build Parquet options on the driver here to validate and fail fast.
+    // The other Parquet option build below will occur on the executors.
+    buildParquetOptions(options, schema)
+
+    val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
+    val broadcastHadoopConf = sparkSession.sparkContext.broadcast(
+      new SerializableConfiguration(hadoopConf))
+    partFile: PartitionedFile => {
+      val conf = broadcastHadoopConf.value.value
+      val partFileData = readPartFileFully(partFile, conf)
+      val parquetOptions = buildParquetOptions(options, schema)
+      Table.readParquet(parquetOptions, partFileData)
+    }
+  }
+
   private def buildCsvOptions(options: Map[String, String]): CSVOptions = {
     val builder = CSVOptions.builder()
     for ((k, v) <- options) {
@@ -367,6 +387,17 @@ object NVDataset {
       })
       parseFunc(builder, v)
     }
+    builder.build
+  }
+
+  private def buildParquetOptions(options: Map[String, String],
+      schema: StructType): ParquetOptions = {
+    // currently no Parquet read options are supported
+    if (!options.isEmpty) {
+      throw new UnsupportedOperationException("No Parquet read options are supported")
+    }
+    val builder = ParquetOptions.builder()
+    builder.includeColumn(schema.map(_.name): _*)
     builder.build
   }
 

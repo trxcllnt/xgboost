@@ -22,7 +22,8 @@ import org.apache.spark.sql.SparkSession
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
 
 class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
-  private final lazy val TRAIN_DATA_PATH = getTestDataPath("/rank.train.csv")
+  private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
+  private lazy val TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
   private val spark = SparkSession.builder.master("local").getOrCreate()
 
   override protected def afterAll(): Unit = spark.close()
@@ -31,7 +32,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new NVDataReader(spark)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
-    val dataset = reader.schema(csvSchema).csv(TRAIN_DATA_PATH)
+    val dataset = reader.schema(csvSchema).csv(TRAIN_CSV_PATH)
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
       Iterator.single(b.getNumColumns, b.getNumRows))
     val counts = rdd.collect
@@ -43,7 +44,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
   test("Unknown CSV parsing option") {
     val reader = new NVDataReader(spark)
     assertThrows[UnsupportedOperationException] {
-      reader.option("something", "something").csv(TRAIN_DATA_PATH)
+      reader.option("something", "something").csv(TRAIN_CSV_PATH)
         .mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
           Iterator.single(b.getNumColumns))
     }
@@ -89,6 +90,31 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
     assertResult(1) { counts.length }
     assertResult(5) { counts(0)._1 }
     assertResult(10) { counts(0)._2 }
+  }
+
+  test("Parquet parsing") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new NVDataReader(spark)
+    val dataset = reader.parquet(TRAIN_PARQUET_PATH)
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+      Iterator.single((b.getNumColumns, b.getNumRows)))
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
+  }
+
+  test("Parquet subset parsing") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new NVDataReader(spark)
+    val specSchema = "a BOOLEAN, c DOUBLE, e INT"
+    val dataset = reader.schema(specSchema).parquet(TRAIN_PARQUET_PATH)
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+      Iterator.single((b.getNumColumns, b.getNumRows)))
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(3) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
   }
 
   private def getTestDataPath(resource: String): String = {

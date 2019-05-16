@@ -22,52 +22,96 @@ import org.apache.spark.sql.types.{BooleanType, DoubleType, IntegerType, StructT
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
 
 class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
+  private lazy val RANK_TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
+  private lazy val RANK_TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
   private val spark = SparkSession.builder.master("local").getOrCreate()
 
   override protected def afterAll(): Unit = spark.close()
 
   test("csv parsing with DDL schema") {
     val reader = new NVDataReaderForTest(spark)
-    val dataPath = getTestDataPath("/rank.train.csv")
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
-    val dataset = reader.schema(csvSchema).csv(dataPath)
+    val dataset = reader.schema(csvSchema).csv(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
-    simpleCsvParsingAssertions(reader)
+    rankTrainCsvAssertions(reader)
   }
 
   test("csv parsing with StructType schema") {
     val reader = new NVDataReaderForTest(spark)
-    val dataPath = getTestDataPath("/rank.train.csv")
     val csvSchema = new StructType()
       .add("a", BooleanType)
       .add("b", DoubleType)
       .add("c", DoubleType)
       .add("d", DoubleType)
       .add("e", IntegerType)
-    val dataset = reader.schema(csvSchema).csv(dataPath)
+    val dataset = reader.schema(csvSchema).csv(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
-    simpleCsvParsingAssertions(reader)
+    rankTrainCsvAssertions(reader)
   }
 
   test("csv parsing with format/load") {
     val reader = new NVDataReaderForTest(spark)
-    val dataPath = getTestDataPath("/rank.train.csv")
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
-    val dataset = reader.format("CSV").schema(csvSchema).load(dataPath)
+    val dataset = reader.format("CSV").schema(csvSchema).load(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
-    simpleCsvParsingAssertions(reader)
+    rankTrainCsvAssertions(reader)
+  }
+
+  test("parquet parsing with DDL schema") {
+    val reader = new NVDataReaderForTest(spark)
+    val specSchema = "a BOOLEAN, c DOUBLE, e INT"
+    val dataset = reader.schema(specSchema).parquet(RANK_TRAIN_PARQUET_PATH)
+    assert(dataset != null)
+    assertResult("parquet") { reader.savedSourceType }
+    assertResult(1) { reader.savedRelation.inputFiles.length }
+    val schema = reader.savedRelation.schema
+    assertResult(3) { schema.length }
+    assertResult(BooleanType) { schema.fields(0).dataType }
+    assertResult("a") { schema.fields(0).name }
+    assertResult(DoubleType) { schema.fields(1).dataType }
+    assertResult("c") { schema.fields(1).name }
+    assertResult(IntegerType) { schema.fields(2).dataType }
+    assertResult("e") { schema.fields(2).name }
+  }
+
+  test("parquet parsing with StructType schema") {
+    val reader = new NVDataReaderForTest(spark)
+    val specSchema = new StructType()
+      .add("a", BooleanType)
+      .add("e", IntegerType)
+    val dataset = reader.schema(specSchema).parquet(RANK_TRAIN_PARQUET_PATH)
+    assert(dataset != null)
+    assertResult("parquet") { reader.savedSourceType }
+    assertResult(1) { reader.savedRelation.inputFiles.length }
+    val schema = reader.savedRelation.schema
+    assertResult(2) { schema.length }
+    assertResult(BooleanType) { schema.fields(0).dataType }
+    assertResult("a") { schema.fields(0).name }
+    assertResult(IntegerType) { schema.fields(1).dataType }
+    assertResult("e") { schema.fields(1).name }
+  }
+
+  test("parquet parsing with format/load") {
+    val reader = new NVDataReaderForTest(spark)
+    val dataset = reader.format("parquet").load(RANK_TRAIN_PARQUET_PATH)
+    assert(dataset != null)
+    assertResult("parquet") { reader.savedSourceType }
+    assertRankTrainLoad(reader)
   }
 
   test("invalid format type specified") {
     val reader = new NVDataReader(spark)
-    val dataPath = getTestDataPath("/rank.train.csv")
     assertThrows[UnsupportedOperationException] {
-      reader.format("badformat").load(dataPath)
+      reader.format("badformat").load(RANK_TRAIN_CSV_PATH)
     }
   }
 
-  private def simpleCsvParsingAssertions(reader: NVDataReaderForTest): Unit = {
+  private def rankTrainCsvAssertions(reader: NVDataReaderForTest): Unit = {
     assertResult("csv") { reader.savedSourceType }
+    assertRankTrainLoad(reader)
+  }
+
+  private def assertRankTrainLoad(reader: NVDataReaderForTest): Unit = {
     val schema = reader.savedRelation.schema
     assertResult(1) { reader.savedRelation.inputFiles.length }
     assertResult(5) { schema.length }
