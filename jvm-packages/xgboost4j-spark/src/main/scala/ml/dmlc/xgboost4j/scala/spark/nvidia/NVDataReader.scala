@@ -156,6 +156,30 @@ class NVDataReader(sparkSession: SparkSession) {
   @scala.annotation.varargs
   def csv(paths: String*): NVDataset = format("csv").load(paths : _*)
 
+  /**
+    * Loads a Parquet file, returning the result as an `NVDataset`. See the documentation
+    * on the other overloaded `parquet()` method for more details.
+    */
+  def parquet(path: String): NVDataset = {
+    // This method ensures that calls that explicit need single argument works, see SPARK-16009
+    parquet(Seq(path): _*)
+  }
+
+  /**
+    * Loads a Parquet file, returning the result as an `NVDataset`.
+    *
+    * You can set the following Parquet-specific option(s) for reading Parquet files:
+    * <ul>
+    * <li>`mergeSchema` (default is the value specified in `spark.sql.parquet.mergeSchema`): sets
+    * whether we should merge schemas collected from all Parquet part-files. This will override
+    * `spark.sql.parquet.mergeSchema`.</li>
+    * </ul>
+    */
+  @scala.annotation.varargs
+  def parquet(paths: String*): NVDataset = {
+    format("parquet").load(paths: _*)
+  }
+
   private var source: String = sparkSession.sessionState.conf.defaultDataSourceName
 
   private var specifiedSchema: Option[StructType] = None
@@ -164,6 +188,11 @@ class NVDataReader(sparkSession: SparkSession) {
 
   private val sourceTypeMap: Map[String, String] = Map(
     "csv" -> "csv",
-    "com.databricks.spark.csv" -> "csv"
+    "com.databricks.spark.csv" -> "csv",
+    "parquet" -> "parquet",
+    "org.apache.spark.sql.parquet" -> "parquet",
+    "org.apache.spark.sql.parquet.DefaultSource" -> "parquet",
+    "org.apache.spark.sql.execution.datasources.parquet" -> "parquet",
+    "org.apache.spark.sql.execution.datasources.parquet.DefaultSource" -> "parquet"
   )
 }
