@@ -18,7 +18,8 @@ package ml.dmlc.xgboost4j.scala.spark.nvidia
 
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{Row, SparkSession}
+import org.scalactic.TolerantNumerics
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
 
 class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
@@ -115,6 +116,43 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
     assertResult(1) { counts.length }
     assertResult(3) { counts(0)._1 }
     assertResult(149) { counts(0)._2 }
+  }
+
+  test("zipPartitionsAsRows") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new NVDataReader(spark)
+    val dataPath = getTestDataPath("/rank.train.csv")
+    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
+    val dataset = reader.schema(csvSchema).csv(dataPath)
+    val rddOther = spark.sparkContext.parallelize(1 to 1000, 1)
+    val zipFunc = (rowIter: Iterator[Row], numIter: Iterator[Int]) => new Iterator[(Int, Row)] {
+      override def hasNext: Boolean = rowIter.hasNext
+
+      override def next(): (Int, Row) = (numIter.next, rowIter.next)
+    }
+
+    val rddZipped = dataset.zipPartitionsAsRows(rddOther, true)(zipFunc)
+    val data = rddZipped.collect
+
+    assertResult(149) { data.length }
+    assertResult(1) { data(0)._1 }
+    val firstRow = data(0)._2
+    assertResult(5) { firstRow.size }
+    assertResult(false) { firstRow.getBoolean(0) }
+    implicit val doubleEquality = TolerantNumerics.tolerantDoubleEquality(0.000000001)
+    assert(firstRow.getDouble(1) === 985.574005058)
+    assert(firstRow.getDouble(2) === 320.223538037)
+    assert(firstRow.getDouble(3) === 0.621236086198)
+    assertResult(1) { firstRow.get(4) }
+
+    assertResult(149) { data(148)._1 }
+    val lastRow = data(148)._2
+    assertResult(5) { lastRow.size }
+    assertResult(false) { firstRow.getBoolean(0) }
+    assert(lastRow.getDouble(1) === 9.90744703306)
+    assert(lastRow.getDouble(2) === 50.810461183)
+    assert(lastRow.getDouble(3) === 3.00863325197)
+    assertResult(20) { lastRow.get(4) }
   }
 
   private def getTestDataPath(resource: String): String = {

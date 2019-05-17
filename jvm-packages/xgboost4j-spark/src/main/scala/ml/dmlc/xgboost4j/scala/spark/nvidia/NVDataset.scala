@@ -21,6 +21,7 @@ import java.util.Locale
 
 import ai.rapids.cudf.{CSVOptions, DType, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
+import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, FileSystem, LocatedFileStatus, Path}
@@ -268,9 +269,12 @@ object NVDataset {
       private var nextRow = 0
       private val row = new UnsafeRow(batch.getNumColumns)
 
-      override def hasNext: Boolean = nextRow >= numRows
+      override def hasNext: Boolean = nextRow < numRows
 
       override def next(): Row = {
+        if (nextRow >= numRows) {
+          throw new NoSuchElementException
+        }
         if (buffer == 0) {
           initBuffer()
         }
@@ -282,12 +286,16 @@ object NVDataset {
       override def close(): Unit = {
         if (buffer != 0) {
           Platform.freeMemory(buffer)
+          buffer = 0
         }
       }
 
       private def initBuffer(): Unit = {
-        buffer = Platform.allocateMemory(rowSize * numRows)
-        throw new UnsupportedOperationException
+        val nativeColumnPtrs = new Array[Long](batch.getNumColumns)
+        for (i <- 0 until batch.getNumColumns) {
+          nativeColumnPtrs(i) = batch.getColumn(i)
+        }
+        buffer = XGBoostSparkJNI.buildUnsafeRows(nativeColumnPtrs)
       }
     }
 

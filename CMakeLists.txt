@@ -133,6 +133,10 @@ file(GLOB_RECURSE CUDA_SOURCES
     src/*.cu
     src/*.cuh
 )
+if(JVM_BINDINGS)
+  list(APPEND CUDA_SOURCES
+    jvm-packages/xgboost4j-spark/src/native/xgboost4j_spark_gpu.cu)
+endif()
 
 # Add plugins to source files
 if(PLUGIN_LZ4)
@@ -188,7 +192,8 @@ if(USE_CUDA AND (NOT GENERATE_COMPILATION_DATABASE))
 
   if(USE_CUDF)
     find_package(CUDF REQUIRED)
-    include_directories(${CUDF_INCLUDE_DIR})
+    find_package(RMM REQUIRED)
+    include_directories(${CUDF_INCLUDE_DIR} ${RMM_INCLUDE_DIR})
     add_definitions(-DXGBOOST_USE_CUDF)
   endif()
 
@@ -311,7 +316,8 @@ if(JVM_BINDINGS)
 
     add_library(xgboost4j SHARED
       $<TARGET_OBJECTS:objxgboost>
-      jvm-packages/xgboost4j/src/native/xgboost4j.cpp)
+      jvm-packages/xgboost4j/src/native/xgboost4j.cpp
+      jvm-packages/xgboost4j-spark/src/native/xgboost4j_spark.cpp)
     target_include_directories(xgboost4j
       PRIVATE ${JNI_INCLUDE_DIRS}
       PRIVATE jvm-packages/xgboost4j/src/native)
