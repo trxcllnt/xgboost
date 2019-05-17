@@ -12,9 +12,6 @@
     <version>0.83-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <properties>
-        <cuda.classifier>cuda10</cuda.classifier>
-    </properties>
     <dependencies>
         <dependency>
             <groupId>junit</groupId>
@@ -37,8 +34,8 @@
         <dependency>
             <groupId>ai.rapids</groupId>
             <artifactId>cudf</artifactId>
-            <version>0.7-SNAPSHOT</version>
-            <classifier>${cuda.classifier}</classifier>
+            <version>${cudf.version}</version>
+            <classifier>${cudf.classifier}</classifier>
             <scope>test</scope>
         </dependency>
         <dependency>
