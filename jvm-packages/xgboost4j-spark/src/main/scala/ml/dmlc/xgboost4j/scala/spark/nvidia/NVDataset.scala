@@ -49,15 +49,23 @@ class NVDataset(fsRelation: HadoopFsRelation,
   def schema: StructType = fsRelation.schema
 
   /**
+    *  Return an [[RDD]] of column batches.
+    *  NOTE: NVColumnBatch is NOT serializable, so one has to be very careful in
+    *        the types of operations performed on this RDD!
+    */
+  private[xgboost4j] def buildRDD: RDD[NVColumnBatch] = {
+    val partitionReader = NVDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
+      schema, sourceOptions)
+    new NVDatasetRDD(fsRelation.sparkSession, partitionReader, partitions)
+  }
+
+  /**
     * Return an [[RDD]] by applying a function expecting RAPIDS cuDF column pointers
     * to each partition of this data.
     */
   private[xgboost4j] def mapColumnarSingleBatchPerPartition[U: ClassTag](
       func: NVColumnBatch => Iterator[U]): RDD[U] = {
-    val partitionReader = NVDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
-      schema, sourceOptions)
-    val rdd = new NVDatasetRDD(fsRelation.sparkSession, partitionReader, partitions)
-    rdd.mapPartitions(NVDataset.getMapper(func))
+    buildRDD.mapPartitions(NVDataset.getMapper(func))
   }
 
   /**
