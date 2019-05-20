@@ -32,6 +32,7 @@ import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelati
 import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StructType, TimestampType}
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
+import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.unsafe.Platform
 
 import scala.collection.mutable.ArrayBuffer
@@ -56,7 +57,7 @@ class NVDataset(fsRelation: HadoopFsRelation,
   private[xgboost4j] def buildRDD: RDD[NVColumnBatch] = {
     val partitionReader = NVDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
       schema, sourceOptions)
-    new NVDatasetRDD(fsRelation.sparkSession, partitionReader, partitions)
+    new NVDatasetRDD(fsRelation.sparkSession, partitionReader, partitions, schema)
   }
 
   /**
@@ -142,8 +143,7 @@ class NVDataset(fsRelation: HadoopFsRelation,
     val openCostInBytes = sparkSession.sessionState.conf.filesOpenCostInBytes
     // Assign files to partitions using "Next Fit Decreasing"
     partitionedFiles.foreach { file =>
-      // Currently multi-file partitions are not supported.
-      if (true) { // if (currentSize + file.length > maxSplitBytes) {
+      if (currentSize + file.length > maxSplitBytes) {
         closePartition()
       }
       // Add the given file to the current partition.
@@ -315,43 +315,12 @@ object NVDataset {
         sparkSession: SparkSession,
         sourceType: String,
         schema: StructType,
-        options: Map[String, String]): PartitionedFile =>
-      Iterator[NVColumnBatch] with AutoCloseable = {
-    val formatReader = sourceType match {
+        options: Map[String, String]): PartitionedFile => Table = {
+    sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options)
       case "parquet" => getParquetPartFileReader(sparkSession, schema, options)
       case _ => throw new UnsupportedOperationException(
         s"Unsupported source type: $sourceType")
-    }
-
-    partFile: PartitionedFile => new Iterator[NVColumnBatch] with AutoCloseable {
-      private var batchTable: Table = _
-      private var batchIterated = false
-
-      override def hasNext: Boolean = {
-        if (batchIterated) {
-          false
-        } else {
-          batchTable = formatReader(partFile)
-          batchTable != null
-        }
-      }
-
-      override def next(): NVColumnBatch = {
-        if (batchIterated || (batchTable == null && !hasNext)) {
-          throw new NoSuchElementException()
-        } else {
-          batchIterated = true
-          new NVColumnBatch(batchTable, schema)
-        }
-      }
-
-      override def close(): Unit = {
-        if (batchTable != null) {
-          batchTable.close()
-          batchTable = null
-        }
-      }
     }
   }
 
@@ -372,7 +341,14 @@ object NVDataset {
       val partFileData = readPartFileFully(partFile, conf)
       val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
       schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-      Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options), partFileData)
+      val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options), partFileData)
+      val numColumns = table.getNumberOfColumns
+      if (schema.length != numColumns) {
+        table.close()
+        throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+          s"but only read ${table.getNumberOfColumns} from $partFile")
+      }
+      table
     }
   }
 
@@ -391,7 +367,14 @@ object NVDataset {
       val conf = broadcastHadoopConf.value.value
       val partFileData = readPartFileFully(partFile, conf)
       val parquetOptions = buildParquetOptions(options, schema)
-      Table.readParquet(parquetOptions, partFileData)
+      val table = Table.readParquet(parquetOptions, partFileData)
+      val numColumns = table.getNumberOfColumns
+      if (schema.length != numColumns) {
+        table.close()
+        throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+            s"but only read ${table.getNumberOfColumns} from $partFile")
+      }
+      table
     }
   }
 
