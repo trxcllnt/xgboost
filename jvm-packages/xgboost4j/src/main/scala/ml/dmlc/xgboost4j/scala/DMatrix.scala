@@ -98,6 +98,26 @@ class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
   }
 
   /**
+   * create DMatrix from CUDF
+   * @param data native handles of GDF columns
+   * @throws ml.dmlc.xgboost4j.java.XGBoostError
+   */
+  @throws(classOf[XGBoostError])
+  def this(data: Array[Long]) {
+    this(new JDMatrix(data))
+  }
+
+  /**
+   * set CUDF info of dmatrix
+   * @param field label or feature
+   * @param cols native handles of GDF columns
+   */
+  @throws(classOf[XGBoostError])
+  def setCUDFInfo(field: String, cols: Array[Long]): Unit = {
+    jDMatrix.setCUDFInfo(field, cols)
+  }
+
+  /**
    * set label of dmatrix
    *
    * @param labels labels

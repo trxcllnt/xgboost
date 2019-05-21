@@ -92,4 +92,8 @@ trait PerTest extends BeforeAndAfterEach { self: FunSuite =>
     ss.createDataFrame(sc.parallelize(it.toList, numPartitions))
       .toDF("id", "label", "features", "group")
   }
+
+  protected def getPath(resName: String): String = {
+    getClass.getResource("/" + resName).getPath
+  }
 }

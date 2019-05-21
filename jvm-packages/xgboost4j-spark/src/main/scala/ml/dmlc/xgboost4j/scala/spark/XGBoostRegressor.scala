@@ -20,6 +20,7 @@ import scala.collection.Iterator
 import scala.collection.JavaConverters._
 
 import ml.dmlc.xgboost4j.java.Rabit
+import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import ml.dmlc.xgboost4j.scala.spark.params.{DefaultXGBoostParamsReader, _}
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
@@ -44,6 +45,7 @@ import org.apache.spark.broadcast.Broadcast
 private[spark] trait XGBoostRegressorParams extends GeneralParams with BoosterParams
   with LearningTaskParams with HasBaseMarginCol with HasWeightCol with HasGroupCol
   with ParamMapFuncs with HasLeafPredictionCol with HasContribPredictionCol with NonParamVariables
+  with HasFeaturesCols
 
 class XGBoostRegressor (
     override val uid: String,
@@ -149,6 +151,8 @@ class XGBoostRegressor (
 
   def setCustomEval(value: EvalTrait): this.type = set(customEval, value)
 
+  def setFeaturesCols(value: Seq[String]): this.type = set(featuresCols, value)
+
   // called at the start of fit/train when 'eval_metric' is not defined
   private def setupDefaultEvalMetric(): String = {
     require(isDefined(objective), "Users must set \'objective\' via xgboostParams.")
@@ -196,6 +200,23 @@ class XGBoostRegressor (
   }
 
   override def copy(extra: ParamMap): XGBoostRegressor = defaultCopy(extra)
+
+  def fit(dataset: NVDataset): XGBoostRegressionModel = {
+    if (!isDefined(evalMetric) || $(evalMetric).isEmpty) {
+      set(evalMetric, setupDefaultEvalMetric())
+    }
+    if (isDefined(customObj) && $(customObj) != null) {
+      set(objectiveType, "regression")
+    }
+
+    val derivedXGBParamMap = MLlib2XGBoostParams
+    // No eval Dataset now, no group support
+    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap)
+    val model = new XGBoostRegressionModel(uid, _booster)
+    val summary = XGBoostTrainingSummary(_metrics)
+    model.setSummary(summary).setParent(this)
+    copyValues(model)
+  }
 }
 
 object XGBoostRegressor extends DefaultParamsReadable[XGBoostRegressor] {
