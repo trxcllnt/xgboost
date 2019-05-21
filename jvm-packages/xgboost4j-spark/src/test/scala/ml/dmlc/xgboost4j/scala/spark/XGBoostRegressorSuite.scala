@@ -94,8 +94,9 @@ class XGBoostRegressorSuite extends FunSuite with PerTest {
   }
 
   test("ranking: use group data") {
+    val workersNum = Math.min(5, numWorkers)
     val paramMap = Map("eta" -> "1", "max_depth" -> "6", "silent" -> "1",
-      "objective" -> "rank:pairwise", "num_workers" -> numWorkers, "num_round" -> 5,
+      "objective" -> "rank:pairwise", "num_workers" -> workersNum, "num_round" -> 5,
       "group_col" -> "group")
 
     val trainingDF = buildDataFrameWithGroup(Ranking.train)

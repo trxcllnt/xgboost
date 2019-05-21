@@ -25,9 +25,15 @@ import org.scalatest.{BeforeAndAfterAll, FunSuite}
 class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
-  private val spark = SparkSession.builder.master("local").getOrCreate()
+  private var spark: SparkSession = _
 
-  override protected def afterAll(): Unit = spark.close()
+  override def beforeAll(): Unit = { synchronized {
+    spark = SparkSession.builder.master("local").getOrCreate()
+  }}
+
+  override def afterAll(): Unit = {
+    synchronized { spark.close() }
+  }
 
   test("mapColumnarSingleBatchPerPartition") {
     assume(Cuda.isEnvCompatibleForTesting)
