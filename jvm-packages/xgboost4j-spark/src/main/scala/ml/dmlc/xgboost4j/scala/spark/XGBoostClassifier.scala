@@ -21,6 +21,7 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 
 import ml.dmlc.xgboost4j.java.Rabit
+import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import ml.dmlc.xgboost4j.scala.spark.params._
@@ -28,6 +29,7 @@ import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.hadoop.fs.Path
 
 import org.apache.spark.TaskContext
+import org.apache.spark.ml.attribute._
 import org.apache.spark.ml.classification._
 import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.param._
@@ -44,6 +46,7 @@ import org.apache.spark.broadcast.Broadcast
 private[spark] trait XGBoostClassifierParams extends GeneralParams with LearningTaskParams
   with BoosterParams with HasWeightCol with HasBaseMarginCol with HasNumClass with ParamMapFuncs
   with HasLeafPredictionCol with HasContribPredictionCol with NonParamVariables
+  with HasFeaturesCols
 
 class XGBoostClassifier (
     override val uid: String,
@@ -149,6 +152,8 @@ class XGBoostClassifier (
 
   def setCustomEval(value: EvalTrait): this.type = set(customEval, value)
 
+  def setFeaturesCols(value: Seq[String]): this.type = set(featuresCols, value)
+
   // called at the start of fit/train when 'eval_metric' is not defined
   private def setupDefaultEvalMetric(): String = {
     require(isDefined(objective), "Users must set \'objective\' via xgboostParams.")
@@ -204,6 +209,49 @@ class XGBoostClassifier (
   }
 
   override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
+
+  def getNumberClasses(labelSchema: StructField): Int = {
+     /*
+      * NVDataset doesn't support to select one column.
+      * So try to get num_classes from StructField first,
+      * If failed, ask user to set it in parameters.
+      */
+    val value = Attribute.fromStructField(labelSchema) match {
+      case binAttr: BinaryAttribute => Some(2)
+      case nomAttr: NominalAttribute => nomAttr.getNumValues
+      case _: NumericAttribute | UnresolvedAttribute => None
+    }
+    val numC = if (isDefined(numClass)) {
+      if ($(numClass) <= 0) {
+        throw new IllegalArgumentException("Invalid parameter 'num_class'!" +
+          " 'num_class' should be larger than 0!")
+      }
+      Some($(numClass))
+    } else {
+      None
+    }
+    if (value.isEmpty && numC.isEmpty) {
+      throw new Exception("The number of classes should be set!")
+    }
+    value.getOrElse(numC.get)
+  }
+
+  def fit(dataset: NVDataset): XGBoostClassificationModel = {
+    if (!isDefined(evalMetric) || $(evalMetric).isEmpty) {
+      set(evalMetric, setupDefaultEvalMetric())
+    }
+    if (isDefined(customObj) && $(customObj) != null) {
+      set(objectiveType, "classification")
+    }
+    val _numClasses = getNumberClasses(dataset.schema($(labelCol)))
+    val derivedXGBParamMap = MLlib2XGBoostParams
+    // No eval Dataset now
+    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap)
+    val model = new XGBoostClassificationModel(uid, _numClasses, _booster)
+    val summary = XGBoostTrainingSummary(_metrics)
+    model.setSummary(summary).setParent(this)
+    copyValues(model)
+  }
 }
 
 object XGBoostClassifier extends DefaultParamsReadable[XGBoostClassifier] {

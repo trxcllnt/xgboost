@@ -23,17 +23,18 @@ import java.util.Properties
 import scala.collection.mutable.ListBuffer
 import scala.collection.{AbstractIterator, mutable}
 import scala.util.Random
-
 import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, RabitTracker => PyRabitTracker}
+import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
+import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.scala.{XGBoost => SXGBoost, _}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.io.FileUtils
 import org.apache.commons.logging.LogFactory
-
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkContext, SparkException, SparkParallelismTracker, TaskContext}
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.storage.StorageLevel
 
 
@@ -289,9 +290,10 @@ object XGBoost extends Serializable {
 
     if (params.contains("tree_method")) {
       require(params("tree_method") == "hist" ||
+        params("tree_method") == "gpu_hist" ||
         params("tree_method") == "approx" ||
         params("tree_method") == "auto", "xgboost4j-spark only supports tree_method as 'hist'," +
-        " 'approx' and 'auto'")
+        " 'gpu_hist', 'approx' and 'auto'")
     }
     if (params.contains("train_test_ratio")) {
       logger.warn("train_test_ratio is deprecated since XGBoost 0.82, we recommend to explicitly" +
@@ -397,6 +399,130 @@ object XGBoost extends Serializable {
     } else {
       val repartitionedData = repartitionForTraining(trainingData, nWorkers)
       Right(cacheData(ifCacheDataBoolean, repartitionedData).asInstanceOf[RDD[XGBLabeledPoint]])
+    }
+  }
+
+  private def parameterOverrideToUseGPU(params: Map[String, Any]): Map[String, Any] = {
+    var updatedParams = params
+    val treeMethod = "tree_method"
+    if(updatedParams.contains(treeMethod) &&
+        !updatedParams(treeMethod).equals("gpu_hist")) {
+      logger.warn("Now tree method 'gpu_hist' is only supported for NVDataset," +
+        " will use it instead!")
+      updatedParams = updatedParams - treeMethod
+    }
+    updatedParams = updatedParams + (treeMethod -> "gpu_hist")
+    updatedParams
+  }
+
+  private def checkAndGetGDFColumnIndices(schema: StructType, params: Map[String, Any]):
+    Seq[Array[Int]] = {
+    val featuresColNames = params.getOrElse("features_cols", Seq("features"))
+      .asInstanceOf[Seq[String]]
+    val labelColName = params.getOrElse("label_col", "label").asInstanceOf[String]
+    val weightColName = params.getOrElse("weight_col", "weight").asInstanceOf[String]
+    val indices = Seq(featuresColNames.toArray, Array(labelColName), Array(weightColName)).map(
+      _.filter(schema.fieldNames.contains).map(schema.fieldIndex)
+    )
+
+    require(indices(0).length == featuresColNames.length,
+      "Features column(s) in schema do NOT match the one(s) in parameters. " +
+      s"Expect [${featuresColNames.mkString(", ")}], " +
+      s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
+    require(indices(1).nonEmpty, "Missing label column!")
+    if (indices(2).isEmpty) {
+      logger.warn("Missing weight column!")
+    }
+    // Seq in this order: features, label, weight
+    indices
+  }
+
+  @throws(classOf[XGBoostError])
+  private def trainForNVDataset(
+      trainingData: NVDataset,
+      gdfColsIndices: Seq[Array[Int]],
+      params: Map[String, Any],
+      hasGroup: Boolean,
+      evalSetsMap: Map[String, NVDataset],
+      rabitEnv: java.util.Map[String, String],
+      checkpointRound: Int,
+      prevBooster: Booster): RDD[(Booster, Map[String, Array[Float]])] = {
+    require(!hasGroup, "Group is not supported yet for NVDataset")
+    // TODO To remove after "repartition" is ready
+    require(evalSetsMap.isEmpty, "Eval NvDataset now is not supported!")
+    val updatedParams = parameterOverrideToUseGPU(params)
+    val (_, _, useExternalMemory, obj, eval, _, _, _, _, _) =
+      parameterFetchAndValidation(updatedParams, trainingData.sparkSession.sparkContext)
+
+    trainingData.mapColumnarSingleBatchPerPartition(columnBatch => {
+      val gdfColsHandles = gdfColsIndices.map(_.map(columnBatch.getColumn))
+      val watches = Watches.buildWatches(gdfColsHandles, getCacheDirName(useExternalMemory))
+      buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
+        obj, eval, prevBooster)
+    }).cache()
+  }
+
+  /**
+    * This version is to train on GPU by default
+    * @return A tuple of the booster and the metrics used to build training summary
+    */
+  @throws(classOf[XGBoostError])
+  private[spark] def trainDistributedForNVDataset(
+      trainingData: NVDataset,
+      params: Map[String, Any],
+      hasGroup: Boolean = false,
+      evalSetsMap: Map[String, NVDataset] = Map()):
+    (Booster, Map[String, Array[Float]]) = {
+    logger.info(s"NVDataset Running XGBoost ${spark.VERSION} with parameters:" +
+      s"\n${params.mkString("\n")}")
+    // Check gdf columns first
+    val gdfColsIndices = checkAndGetGDFColumnIndices(trainingData.schema, params)
+    // Cache is not supported
+    val isCacheData = params.getOrElse("cacheTrainingSet", false).asInstanceOf[Boolean]
+    if (isCacheData) {
+      logger.warn("Data cache is not support for NVDataset!")
+    }
+    val sc = trainingData.sparkSession.sparkContext
+    val (nWorkers, round, _, _, _, _, trackerConf, timeoutRequestWorkers,
+    checkpointPath, checkpointInterval) = parameterFetchAndValidation(params, sc)
+    val checkpointManager = new CheckpointManager(sc, checkpointPath)
+    checkpointManager.cleanUpHigherVersions(round.asInstanceOf[Int])
+    var prevBooster = checkpointManager.loadCheckpointAsBooster
+    try {
+      // Train for every ${savingRound} rounds and save the partially completed booster
+      checkpointManager.getCheckpointRounds(checkpointInterval, round).map {
+        checkpointRound: Int =>
+          val tracker = startTracker(nWorkers, trackerConf)
+          try {
+            val overriddenParams = overrideParamsAccordingToTaskCPUs(params, sc)
+            val parallelismTracker = new SparkParallelismTracker(sc, timeoutRequestWorkers,
+              nWorkers)
+            val boostersAndMetrics = trainForNVDataset(trainingData, gdfColsIndices,
+              overriddenParams, hasGroup, evalSetsMap, tracker.getWorkerEnvs,
+              checkpointRound, prevBooster)
+            val sparkJobThread = new Thread() {
+              override def run() {
+                // force the job
+                boostersAndMetrics.foreachPartition(() => _)
+              }
+            }
+            sparkJobThread.setUncaughtExceptionHandler(tracker)
+            sparkJobThread.start()
+            val trackerReturnVal = parallelismTracker.execute(tracker.waitFor(0L))
+            logger.info(s"NVDataset Rabit returns with exit code $trackerReturnVal")
+            val (booster, metrics) = postTrackerReturnProcessing(trackerReturnVal,
+              boostersAndMetrics, sparkJobThread)
+            if (checkpointRound < round) {
+              prevBooster = booster
+              checkpointManager.updateCheckpoint(prevBooster)
+            }
+            (booster, metrics)
+          } finally {
+            tracker.stop()
+          }
+      }.last
+    } finally {
+      // Cache is not supported
     }
   }
 
@@ -621,6 +747,19 @@ private object Watches {
         s"Encountered a partition with $nUndefined NaN base margin values. " +
           s"If you want to specify base margin, ensure all values are non-NaN.")
     }
+  }
+
+  def buildWatches(
+      gdfColHandles: Seq[Array[Long]],
+      cachedDirName: Option[String]): Watches = {
+    // Suppose gdf columns are given in this order: features, label, weight,
+    // the same with that in 'getGDFColumnIndices'.
+    val trainMatrix = new DMatrix(gdfColHandles(0))
+    trainMatrix.setCUDFInfo("label", gdfColHandles(1))
+    if (gdfColHandles(2).nonEmpty) {
+      trainMatrix.setCUDFInfo("weight", gdfColHandles(2))
+    }
+    new Watches(Array(trainMatrix), Array("train"), cachedDirName)
   }
 
   def buildWatches(

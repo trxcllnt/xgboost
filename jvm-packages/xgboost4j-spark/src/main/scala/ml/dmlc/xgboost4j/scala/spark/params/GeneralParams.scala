@@ -228,6 +228,18 @@ trait HasGroupCol extends Params {
 
 }
 
+trait HasFeaturesCols extends Params {
+  /**
+    * Param for the name of multiple features columns.
+    * @group param
+    */
+  final val featuresCols: Param[Seq[String]] = new Param[Seq[String]](this, "featuresCols",
+    "name of multiple features columns.")
+
+  /** @group getParam */
+  final def getFeaturesCols: Seq[String] = $(featuresCols)
+}
+
 trait HasNumClass extends Params {
 
   /**
