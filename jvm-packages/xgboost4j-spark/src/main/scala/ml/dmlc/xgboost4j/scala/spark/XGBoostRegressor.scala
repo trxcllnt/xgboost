@@ -28,7 +28,7 @@ import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import org.apache.hadoop.fs.Path
 
 import org.apache.spark.TaskContext
-import org.apache.spark.ml.linalg.{DenseVector, SparseVector, Vector}
+import org.apache.spark.ml.linalg.{Vector}
 import org.apache.spark.ml.param.shared.HasWeightCol
 import org.apache.spark.ml.util._
 import org.apache.spark.ml._
@@ -272,6 +272,58 @@ class XGBoostRegressionModel private[ml] (
     _booster.predict(data = dm)(0)(0)
   }
 
+  private def transformInternal(dataset: NVDataset): DataFrame = {
+    val schema = StructType(dataset.schema.fields ++
+      Seq(StructField(name = _originalPredictionCol, dataType =
+        ArrayType(FloatType, containsNull = false), nullable = false)))
+
+    val bBooster = dataset.sparkSession.sparkContext.broadcast(_booster)
+    val appName = dataset.sparkSession.sparkContext.appName
+
+    val derivedXGBParamMap = MLlib2XGBoostParams
+    var featuresColNames = derivedXGBParamMap.getOrElse("features_cols", Nil)
+      .asInstanceOf[Seq[String]]
+
+    val indices = Seq(featuresColNames.toArray).map(
+      _.filter(schema.fieldNames.contains).map(schema.fieldIndex)
+    )
+
+    require(indices(0).length == featuresColNames.length,
+      "Features column(s) in schema do NOT match the one(s) in parameters. " +
+        s"Expect [${featuresColNames.mkString(", ")}], " +
+        s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
+
+    val predictionRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
+      val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+      Rabit.init(rabitEnv.asJava)
+
+      val gdfColsHandles = indices.map(_.map(nvColumnBatch.getColumn))
+      val dm = new DMatrix(gdfColsHandles(0))
+
+      try {
+        val Array(originalPredictionItr, predLeafItr, predContribItr) =
+          producePredictionItrs(bBooster, dm)
+        Rabit.shutdown()
+        Iterator(originalPredictionItr, predLeafItr, predContribItr)
+      } finally {
+        dm.delete()
+      }
+    })
+
+    val resultRDD = dataset.zipPartitionsAsRows(predictionRDD, preservesPartitioning = true) {
+      case (inputIterator, predictionItr) =>
+        if (inputIterator.hasNext) {
+          produceResultIterator(inputIterator, predictionItr.next(), predictionItr.next(),
+            predictionItr.next())
+        } else {
+          Iterator()
+        }
+    }
+
+    bBooster.unpersist(blocking = false)
+    dataset.sparkSession.createDataFrame(resultRDD, generateResultSchema(schema))
+  }
+
   private def transformInternal(dataset: Dataset[_]): DataFrame = {
 
     val schema = StructType(dataset.schema.fields ++
@@ -390,6 +442,29 @@ class XGBoostRegressionModel private[ml] (
       }
     }
     Array(originalPredictionItr, predLeafItr, predContribItr)
+  }
+
+  def transform(dataset: NVDataset): DataFrame = {
+    // Output selected columns only.
+    // This is a bit complicated since it tries to avoid repeated computation.
+    var outputData = transformInternal(dataset)
+    var numColsOutput = 0
+
+    val predictUDF = udf { (originalPrediction: mutable.WrappedArray[Float]) =>
+      originalPrediction(0).toDouble
+    }
+
+    if ($(predictionCol).nonEmpty) {
+      outputData = outputData
+        .withColumn($(predictionCol), predictUDF(col(_originalPredictionCol)))
+      numColsOutput += 1
+    }
+
+    if (numColsOutput == 0) {
+      this.logWarning(s"$uid: ProbabilisticClassificationModel.transform() was called as NOOP" +
+        " since no output columns were set.")
+    }
+    outputData.toDF.drop(col(_originalPredictionCol))
   }
 
   override def transform(dataset: Dataset[_]): DataFrame = {
