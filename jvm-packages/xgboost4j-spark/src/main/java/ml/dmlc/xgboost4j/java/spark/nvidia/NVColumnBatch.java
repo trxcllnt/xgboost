@@ -44,13 +44,6 @@ public class NVColumnBatch {
 
   public long getColumn(int index) {
     ColumnVector v = table.getColumn(index);
-    long nativeAddr = v.getNativeCudfColumnAddress();
-
-    // Closing the vector to prevent a refcount leak.
-    // Assumption is the cudf table tracked by this batch will always
-    // outlive the use of the native address being returned here.
-    v.close();
-
-    return nativeAddr;
+    return v.getNativeCudfColumnAddress();
   }
 }
