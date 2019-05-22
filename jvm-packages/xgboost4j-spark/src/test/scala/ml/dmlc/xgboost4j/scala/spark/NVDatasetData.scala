@@ -22,7 +22,10 @@ import ai.rapids.cudf.{DType, Table}
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.scala.spark.nvidia.{NVDataReader, NVDataset}
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StructField, StructType, TimestampType}
+import org.apache.spark.sql.types.{
+  BooleanType, ByteType, DataType, DateType, DoubleType,
+  FloatType, IntegerType, LongType, ShortType, StructField, StructType, TimestampType
+}
 
 object NVDatasetData {
 
@@ -92,7 +95,7 @@ object NVDatasetData {
   }
 
   private def getColumns(file: String, schema: StructType, label: String):
-      (Array[Long], Array[Long]) = {
+  (Table, Array[Long], Array[Long]) = {
     val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
     schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
     val table = Table.readCSV(csvSchemaBuilder.build(), new File(getTestDataPath(file)))
@@ -115,7 +118,7 @@ object NVDatasetData {
       }
     }).filter(_ > 0)
 
-    (featuresHandle, labelsHandle)
+    (table, featuresHandle, labelsHandle)
   }
 
   private def getTestDataPath(resource: String): String = {
@@ -123,17 +126,65 @@ object NVDatasetData {
     getClass.getResource(resource).getPath
   }
 
-  lazy val classifierTest: (Array[Long], Array[Long]) =
-    getColumns(classifierTestDataPath, classifierSchema, "classIndex")
-  lazy val classifierTrain: (Array[Long], Array[Long]) =
-    getColumns(classifierTrainDataPath, classifierSchema, "classIndex")
+  def classifierCleanUp(): Unit = {
+    if (classifierTrainTable != null) {
+      classifierTrainTable.close()
+      classifierTrainTable = null
+    }
+
+    if (classifierTestTable != null) {
+      classifierTestTable.close()
+      classifierTestTable = null
+    }
+  }
+
+  def regressionCleanUp(): Unit = {
+    if (regressionTestTable != null) {
+      regressionTestTable.close()
+      regressionTestTable = null
+    }
+
+    if (regressionTrainTable != null) {
+      regressionTrainTable.close()
+      regressionTrainTable = null
+    }
+  }
+
+  var classifierTestTable: Table = null
+  var classifierTrainTable: Table = null
+
+  lazy val classifierTest: (Array[Long], Array[Long]) = {
+    val (table, features, labels) = getColumns(classifierTestDataPath,
+      classifierSchema, "classIndex")
+    classifierTestTable = table;
+    (features, labels)
+  }
+  lazy val classifierTrain: (Array[Long], Array[Long]) = {
+    val (table, features, labels) = getColumns(classifierTrainDataPath,
+      classifierSchema, "classIndex")
+    classifierTrainTable = table
+    (features, labels)
+  }
   lazy val classifierFeatureCols: Seq[String] =
     classifierSchema.fieldNames.filter(_ != "classIndex")
 
-  lazy val regressionTest: (Array[Long], Array[Long]) = getColumns(regressionTestDataPath,
-    regressionSchema, "e")
-  lazy val regressionTrain: (Array[Long], Array[Long]) = getColumns(regressionTrainDataPath,
-    regressionSchema, "e")
+
+  var regressionTestTable: Table = null
+  var regressionTrainTable: Table = null
+
+  lazy val regressionTest: (Array[Long], Array[Long]) = {
+    val (table, features, labels) = getColumns(regressionTestDataPath,
+      regressionSchema, "e")
+    regressionTestTable = table
+    (features, labels)
+  }
+  lazy val regressionTrain: (Array[Long], Array[Long]) = {
+    val (table, features, labels) = getColumns(regressionTrainDataPath,
+      regressionSchema, "e")
+    regressionTrainTable = table
+    (features, labels)
+  }
+
   lazy val regressionFeatureCols: Seq[String] =
     regressionSchema.fieldNames.filter(_ != "e")
 }

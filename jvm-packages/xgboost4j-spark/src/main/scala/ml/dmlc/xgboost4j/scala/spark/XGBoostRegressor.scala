@@ -303,9 +303,9 @@ class XGBoostRegressionModel private[ml] (
       try {
         val Array(originalPredictionItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
-        Rabit.shutdown()
         Iterator(originalPredictionItr, predLeafItr, predContribItr)
       } finally {
+        Rabit.shutdown()
         dm.delete()
       }
     })

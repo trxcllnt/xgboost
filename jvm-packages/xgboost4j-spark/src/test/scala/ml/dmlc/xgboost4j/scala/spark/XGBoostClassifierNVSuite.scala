@@ -34,6 +34,11 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     "num_workers" -> 1,
     "timeout_request_workers" -> 60000L))
 
+  override def afterEach(): Unit = {
+    super.afterEach()
+    NVDatasetData.classifierCleanUp()
+  }
+
   test("test XGBoost-Spark XGBoostClassifier setFeaturesCols") {
     val gdfCols = Seq("gdfCol1", "gdfCol2")
     NVClassifier.setFeaturesCols(gdfCols)
@@ -63,7 +68,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(0 < ret && ret < 5)
   }
 
-  test("NV Classifier XGBoost-Spark XGBoostClassifier ouput should match XGBoost4j") {
+  test("NV Classifier XGBoost-Spark XGBoostClassifier output should match XGBoost4j") {
     val (trainFeaturesHandle, trainLabelsHandle) = NVDatasetData.classifierTrain
     assert(trainFeaturesHandle.nonEmpty)
     assert(trainFeaturesHandle.size == 4)

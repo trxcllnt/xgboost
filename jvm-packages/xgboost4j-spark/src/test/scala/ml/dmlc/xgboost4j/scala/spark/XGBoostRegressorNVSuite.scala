@@ -34,6 +34,11 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     "num_workers" -> 1,
     "timeout_request_workers" -> 60000L))
 
+  override def afterEach(): Unit = {
+    super.afterEach()
+    NVDatasetData.regressionCleanUp()
+  }
+
   test("test XGBoost-Spark XGBoostRegressor setFeaturesCols") {
     val gdfCols = Seq("gdfCol1", "gdfCol2")
     NVRegressor.setFeaturesCols(gdfCols)

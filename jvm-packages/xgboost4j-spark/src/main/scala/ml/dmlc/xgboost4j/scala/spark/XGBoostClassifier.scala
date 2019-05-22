@@ -358,9 +358,9 @@ class XGBoostClassificationModel private[ml](
       try {
         val Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
-        Rabit.shutdown()
         Iterator(rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
       } finally {
+        Rabit.shutdown()
         dm.delete()
       }
     })
