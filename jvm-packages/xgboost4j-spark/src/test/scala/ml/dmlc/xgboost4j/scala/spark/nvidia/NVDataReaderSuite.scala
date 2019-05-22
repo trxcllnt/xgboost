@@ -24,15 +24,9 @@ import org.scalatest.{BeforeAndAfterAll, FunSuite}
 class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   private lazy val RANK_TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val RANK_TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
-  private var spark: SparkSession = _
+  private val spark = SparkSession.builder.master("local").getOrCreate()
 
-  override def beforeAll(): Unit = { synchronized {
-    spark = SparkSession.builder.master("local").getOrCreate()
-  }}
-
-  override def afterAll(): Unit = {
-    synchronized { spark.close() }
-  }
+  override protected def afterAll(): Unit = spark.close()
 
   test("csv parsing with DDL schema") {
     val reader = new NVDataReaderForTest(spark)
