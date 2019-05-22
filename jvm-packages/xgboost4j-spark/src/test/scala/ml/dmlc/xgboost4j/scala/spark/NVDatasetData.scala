@@ -101,24 +101,22 @@ object NVDatasetData {
     val table = Table.readCSV(csvSchemaBuilder.build(), new File(getTestDataPath(file)))
     val nvColumnBatch = new NVColumnBatch(table, schema)
 
-    val featuresColNames = schema.fieldNames.filter(_ != label)
-    val featuresHandle = featuresColNames.map(colName => {
-      try {
-        nvColumnBatch.getColumn(schema.fieldIndex(colName))
-      } catch {
-        case e: Exception => -1L
+    var needTableClose = true
+    try {
+      val featuresColNames = schema.fieldNames.filter(_ != label)
+      val featuresHandle = featuresColNames.map(colName => {
+          nvColumnBatch.getColumn(schema.fieldIndex(colName))
+      })
+      val labelsHandle = Array(label).map(colName => {
+          nvColumnBatch.getColumn(schema.fieldIndex(colName))
+      })
+      needTableClose = false
+      (table, featuresHandle, labelsHandle)
+    } finally {
+      if (needTableClose) {
+        table.close()
       }
-    }).filter(_ > 0)
-
-    val labelsHandle = Array(label).map(colName => {
-      try {
-        nvColumnBatch.getColumn(schema.fieldIndex(colName))
-      } catch {
-        case e: Exception => -1L
-      }
-    }).filter(_ > 0)
-
-    (table, featuresHandle, labelsHandle)
+    }
   }
 
   private def getTestDataPath(resource: String): String = {
@@ -167,7 +165,6 @@ object NVDatasetData {
   }
   lazy val classifierFeatureCols: Seq[String] =
     classifierSchema.fieldNames.filter(_ != "classIndex")
-
 
   var regressionTestTable: Table = null
   var regressionTrainTable: Table = null

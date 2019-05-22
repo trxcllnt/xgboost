@@ -350,11 +350,11 @@ class XGBoostClassificationModel private[ml](
 
     val predictionRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
       val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
-      Rabit.init(rabitEnv.asJava)
 
       val gdfColsHandles = indices.map(_.map(nvColumnBatch.getColumn))
       val dm = new DMatrix(gdfColsHandles(0))
 
+      Rabit.init(rabitEnv.asJava)
       try {
         val Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
