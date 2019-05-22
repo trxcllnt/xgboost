@@ -18,20 +18,18 @@ package ml.dmlc.xgboost4j.scala.spark.nvidia
 
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
+import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.sql.{Row, SparkSession}
 import org.scalactic.TolerantNumerics
-import org.scalatest.{BeforeAndAfterAll, FunSuite}
+import org.scalatest.FunSuite
 
-class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
+class NVDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
-  private val spark = SparkSession.builder.master("local").getOrCreate()
-
-  override protected def afterAll(): Unit = spark.close()
 
   test("mapColumnarSingleBatchPerPartition") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(TRAIN_CSV_PATH)
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
@@ -43,7 +41,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("Unknown CSV parsing option") {
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     assertThrows[UnsupportedOperationException] {
       reader.option("something", "something").csv(TRAIN_CSV_PATH)
         .mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
@@ -53,7 +51,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
 
   test("CSV parsing with header") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val path = getTestDataPath("/header.csv")
     val dataset = reader.schema(csvSchema).option("header", true).csv(path)
@@ -67,7 +65,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
 
   test("CSV parsing with custom delimiter") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val path = getTestDataPath("/custom-delim.csv")
     val dataset = reader.schema(csvSchema).option("sep", "|").csv(path)
@@ -81,7 +79,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
 
   test("CSV parsing with comments") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val path = getTestDataPath("/commented.csv")
     val dataset = reader.schema(csvSchema).option("comment", "#").csv(path)
@@ -95,7 +93,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
 
   test("Parquet parsing") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val dataset = reader.parquet(TRAIN_PARQUET_PATH)
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
@@ -107,7 +105,7 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
 
   test("Parquet subset parsing") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val specSchema = "a BOOLEAN, c DOUBLE, e INT"
     val dataset = reader.schema(specSchema).parquet(TRAIN_PARQUET_PATH)
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
@@ -120,11 +118,11 @@ class NVDatasetSuite extends FunSuite with BeforeAndAfterAll {
 
   test("zipPartitionsAsRows") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     val dataPath = getTestDataPath("/rank.train.csv")
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(dataPath)
-    val rddOther = spark.sparkContext.parallelize(1 to 1000, 1)
+    val rddOther = ss.sparkContext.parallelize(1 to 1000, 1)
     val zipFunc = (rowIter: Iterator[Row], numIter: Iterator[Int]) => new Iterator[(Int, Row)] {
       override def hasNext: Boolean = rowIter.hasNext
 
