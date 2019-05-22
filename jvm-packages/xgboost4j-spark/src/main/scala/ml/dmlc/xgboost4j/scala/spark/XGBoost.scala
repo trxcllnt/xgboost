@@ -142,20 +142,21 @@ object XGBoost extends Serializable {
       obj: ObjectiveTrait,
       eval: EvalTrait,
       prevBooster: Booster): Iterator[(Booster, Map[String, Array[Float]])] = {
-
-    // to workaround the empty partitions in training dataset,
-    // this might not be the best efficient implementation, see
-    // (https://github.com/dmlc/xgboost/issues/1277)
-    if (watches.toMap("train").rowNum == 0) {
-      throw new XGBoostError(
-        s"detected an empty partition in the training data, partition ID:" +
-          s" ${TaskContext.getPartitionId()}")
-    }
     val taskId = TaskContext.getPartitionId().toString
     rabitEnv.put("DMLC_TASK_ID", taskId)
     Rabit.init(rabitEnv)
 
     try {
+      // to workaround the empty partitions in training dataset,
+      // this might not be the best efficient implementation, see
+      // (https://github.com/dmlc/xgboost/issues/1277)
+      val dmMap = watches.toMap
+      val trainName = "train"
+      if (!dmMap.contains(trainName) || dmMap(trainName).rowNum == 0) {
+        throw new XGBoostError(
+          s"detected an empty partition in the training data, partition ID:" +
+            s" ${TaskContext.getPartitionId()}")
+      }
       val numEarlyStoppingRounds = params.get("num_early_stopping_rounds")
         .map(_.toString.toInt).getOrElse(0)
       if (numEarlyStoppingRounds > 0) {
@@ -164,7 +165,7 @@ object XGBoost extends Serializable {
         }
       }
       val metrics = Array.tabulate(watches.size)(_ => Array.ofDim[Float](round))
-      val booster = SXGBoost.train(watches.toMap("train"), params, round,
+      val booster = SXGBoost.train(watches.toMap(trainName), params, round,
         watches.toMap, metrics, obj, eval,
         earlyStoppingRound = numEarlyStoppingRounds, prevBooster)
       Iterator(booster -> watches.toMap.keys.zip(metrics).toMap)

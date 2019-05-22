@@ -24,7 +24,6 @@ import ml.dmlc.xgboost4j.scala.DMatrix
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
 import ml.dmlc.xgboost4j.scala.{XGBoost => SXGBoost, _}
 import org.apache.hadoop.fs.{FileSystem, Path}
-
 import org.apache.spark.TaskContext
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql._
@@ -32,7 +31,6 @@ import org.scalatest.FunSuite
 import scala.util.Random
 
 import ml.dmlc.xgboost4j.java.Rabit
-
 import org.apache.spark.ml.feature.VectorAssembler
 
 class XGBoostGeneralSuite extends FunSuite with PerTest {
@@ -364,11 +362,12 @@ class XGBoostGeneralSuite extends FunSuite with PerTest {
   }
 
   test("distributed training with group data") {
-    val trainingRDD = sc.parallelize(Ranking.train, 5)
+    val numSlice = Math.min(5, numWorkers)
+    val trainingRDD = sc.parallelize(Ranking.train, numSlice)
     val (booster, _) = XGBoost.trainDistributed(
       trainingRDD,
       List("eta" -> "1", "max_depth" -> "6",
-        "objective" -> "rank:pairwise", "num_round" -> 5, "num_workers" -> numWorkers,
+        "objective" -> "rank:pairwise", "num_round" -> 5, "num_workers" -> numSlice,
         "custom_eval" -> null, "custom_obj" -> null, "use_external_memory" -> false,
         "missing" -> Float.NaN).toMap,
       hasGroup = true)
@@ -433,11 +432,12 @@ class XGBoostGeneralSuite extends FunSuite with PerTest {
   }
 
   test("train with multiple validation datasets (ranking)") {
-    val training = buildDataFrameWithGroup(Ranking.train, 5)
+    val numSlice = Math.min(5, numWorkers)
+    val training = buildDataFrameWithGroup(Ranking.train, numSlice)
     val Array(train, eval1, eval2) = training.randomSplit(Array(0.6, 0.2, 0.2))
     val paramMap1 = Map("eta" -> "1", "max_depth" -> "6",
       "objective" -> "rank:pairwise",
-      "num_round" -> 5, "num_workers" -> numWorkers, "group_col" -> "group")
+      "num_round" -> 5, "num_workers" -> numSlice, "group_col" -> "group")
     val xgb1 = new XGBoostRegressor(paramMap1).setEvalSets(Map("eval1" -> eval1, "eval2" -> eval2))
     val model1 = xgb1.fit(train)
     assert(model1 != null)
@@ -450,7 +450,7 @@ class XGBoostGeneralSuite extends FunSuite with PerTest {
 
     val paramMap2 = Map("eta" -> "1", "max_depth" -> "6",
       "objective" -> "rank:pairwise",
-      "num_round" -> 5, "num_workers" -> numWorkers, "group_col" -> "group",
+      "num_round" -> 5, "num_workers" -> numSlice, "group_col" -> "group",
       "eval_sets" -> Map("eval1" -> eval1, "eval2" -> eval2))
     val xgb2 = new XGBoostRegressor(paramMap2)
     val model2 = xgb2.fit(train)
