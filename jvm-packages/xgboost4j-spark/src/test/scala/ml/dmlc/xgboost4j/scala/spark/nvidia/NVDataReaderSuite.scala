@@ -16,20 +16,18 @@
 
 package ml.dmlc.xgboost4j.scala.spark.nvidia
 
+import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.HadoopFsRelation
 import org.apache.spark.sql.types.{BooleanType, DoubleType, IntegerType, StructType}
-import org.scalatest.{BeforeAndAfterAll, FunSuite}
+import org.scalatest.FunSuite
 
-class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
+class NVDataReaderSuite extends FunSuite with PerTest {
   private lazy val RANK_TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val RANK_TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
-  private val spark = SparkSession.builder.master("local").getOrCreate()
-
-  override protected def afterAll(): Unit = spark.close()
 
   test("csv parsing with DDL schema") {
-    val reader = new NVDataReaderForTest(spark)
+    val reader = new NVDataReaderForTest(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
@@ -37,7 +35,7 @@ class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("csv parsing with StructType schema") {
-    val reader = new NVDataReaderForTest(spark)
+    val reader = new NVDataReaderForTest(ss)
     val csvSchema = new StructType()
       .add("a", BooleanType)
       .add("b", DoubleType)
@@ -50,7 +48,7 @@ class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("csv parsing with format/load") {
-    val reader = new NVDataReaderForTest(spark)
+    val reader = new NVDataReaderForTest(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.format("CSV").schema(csvSchema).load(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
@@ -58,7 +56,7 @@ class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("parquet parsing with DDL schema") {
-    val reader = new NVDataReaderForTest(spark)
+    val reader = new NVDataReaderForTest(ss)
     val specSchema = "a BOOLEAN, c DOUBLE, e INT"
     val dataset = reader.schema(specSchema).parquet(RANK_TRAIN_PARQUET_PATH)
     assert(dataset != null)
@@ -75,7 +73,7 @@ class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("parquet parsing with StructType schema") {
-    val reader = new NVDataReaderForTest(spark)
+    val reader = new NVDataReaderForTest(ss)
     val specSchema = new StructType()
       .add("a", BooleanType)
       .add("e", IntegerType)
@@ -92,7 +90,7 @@ class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("parquet parsing with format/load") {
-    val reader = new NVDataReaderForTest(spark)
+    val reader = new NVDataReaderForTest(ss)
     val dataset = reader.format("parquet").load(RANK_TRAIN_PARQUET_PATH)
     assert(dataset != null)
     assertResult("parquet") { reader.savedSourceType }
@@ -100,7 +98,7 @@ class NVDataReaderSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("invalid format type specified") {
-    val reader = new NVDataReader(spark)
+    val reader = new NVDataReader(ss)
     assertThrows[UnsupportedOperationException] {
       reader.format("badformat").load(RANK_TRAIN_CSV_PATH)
     }
