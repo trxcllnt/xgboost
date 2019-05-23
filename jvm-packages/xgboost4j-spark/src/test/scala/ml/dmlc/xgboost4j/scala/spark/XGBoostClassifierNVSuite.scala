@@ -49,12 +49,12 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     val trainDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
     NVClassifier.setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
                 .setLabelCol("e")
-    // num_classes is required
-    assertThrows[Exception](NVClassifier.fit(trainDataAsNVDS))
-    // Invalid num_classes
+    // num_class is required for multiple classification
+    assertThrows[IllegalArgumentException](NVClassifier.fit(trainDataAsNVDS))
+    // Invalid num_class
     NVClassifier.setNumClass(-1)
     assertThrows[IllegalArgumentException](NVClassifier.fit(trainDataAsNVDS))
-    NVClassifier.setNumClass(100)
+    NVClassifier.setNumClass(21)
     val model = NVClassifier.fit(trainDataAsNVDS)
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy

@@ -210,30 +210,34 @@ class XGBoostClassifier (
 
   override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
 
-  def getNumberClasses(labelSchema: StructField): Int = {
+  private def getNumberClasses(labelSchema: StructField): Int = {
      /*
-      * NVDataset doesn't support to select one column.
-      * So try to get num_classes from StructField first,
-      * If failed, ask user to set it in parameters.
+      * Now NVDataset does not support to get classes number,
+      * So try to figure it out in this order:
+      * 1) From the StructField of label
+      * 2) From evalMetric
+      * 3) From param 'numClass'
       */
-    val value = Attribute.fromStructField(labelSchema) match {
+    val classNum = Attribute.fromStructField(labelSchema) match {
       case binAttr: BinaryAttribute => Some(2)
       case nomAttr: NominalAttribute => nomAttr.getNumValues
       case _: NumericAttribute | UnresolvedAttribute => None
     }
-    val numC = if (isDefined(numClass)) {
-      if ($(numClass) <= 0) {
-        throw new IllegalArgumentException("Invalid parameter 'num_class'!" +
-          " 'num_class' should be larger than 0!")
+    classNum orElse {
+      val innerClassNum = if (setupDefaultEvalMetric == "error") 2 else 3
+      val paramClassNum = if (isDefined(numClass)) {
+        require((innerClassNum == 2 && $(numClass) == 1) ||
+          (innerClassNum == 3 && $(numClass) >= 3),
+          "Invalid param 'num_class', suppose to be '1' for binary classification" +
+            " and value (> 2) for multiple classification!")
+        // The returned value is used by model, should be 2 for binary classification
+        Some(if (innerClassNum == 3) $(numClass) else innerClassNum)
+      } else {
+        require(innerClassNum == 2, "Param 'num_class' should be set for multiple classification!")
+        None
       }
-      Some($(numClass))
-    } else {
-      None
-    }
-    if (value.isEmpty && numC.isEmpty) {
-      throw new Exception("The number of classes should be set!")
-    }
-    value.getOrElse(numC.get)
+      paramClassNum orElse Some(innerClassNum)
+    } get
   }
 
   def fit(dataset: NVDataset): XGBoostClassificationModel = {
@@ -244,6 +248,7 @@ class XGBoostClassifier (
       set(objectiveType, "classification")
     }
     val _numClasses = getNumberClasses(dataset.schema($(labelCol)))
+    println(s"Got 'numClass'=${_numClasses} for NVDataset")
     val derivedXGBParamMap = MLlib2XGBoostParams
     // No eval Dataset now
     val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap)
