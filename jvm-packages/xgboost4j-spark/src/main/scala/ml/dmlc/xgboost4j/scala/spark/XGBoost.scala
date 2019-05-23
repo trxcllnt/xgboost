@@ -27,6 +27,7 @@ import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, RabitTracker 
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
 import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
+import ml.dmlc.xgboost4j.scala.spark.params.BoosterParams
 import ml.dmlc.xgboost4j.scala.{XGBoost => SXGBoost, _}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.io.FileUtils
@@ -290,11 +291,9 @@ object XGBoost extends Serializable {
     validateSparkSslConf(sparkContext)
 
     if (params.contains("tree_method")) {
-      require(params("tree_method") == "hist" ||
-        params("tree_method") == "gpu_hist" ||
-        params("tree_method") == "approx" ||
-        params("tree_method") == "auto", "xgboost4j-spark only supports tree_method as 'hist'," +
-        " 'gpu_hist', 'approx' and 'auto'")
+      require(BoosterParams.supportedTreeMethods.contains(params("tree_method")
+        .asInstanceOf[String]), "xgboost4j-spark only supports tree_method as [" +
+        s"${BoosterParams.supportedTreeMethods.mkString(", ")}]")
     }
     if (params.contains("train_test_ratio")) {
       logger.warn("train_test_ratio is deprecated since XGBoost 0.82, we recommend to explicitly" +
@@ -406,13 +405,23 @@ object XGBoost extends Serializable {
   private def parameterOverrideToUseGPU(params: Map[String, Any]): Map[String, Any] = {
     var updatedParams = params
     val treeMethod = "tree_method"
-    if(updatedParams.contains(treeMethod) &&
-        !updatedParams(treeMethod).equals("gpu_hist")) {
-      logger.warn("Now tree method 'gpu_hist' is only supported for NVDataset," +
-        " will use it instead!")
-      updatedParams = updatedParams - treeMethod
+    if(updatedParams.contains(treeMethod)) {
+      // This is called after 'parameterFetchAndValidation', so we only need to make sure
+      // "tree_method" is gpu_XXX
+      val tmValue = updatedParams(treeMethod).asInstanceOf[String]
+      if (tmValue == "auto") {
+        // Choose "gpu_hist" for GPU training when auto is set
+        updatedParams = updatedParams + (treeMethod -> "gpu_hist")
+      } else {
+        require(tmValue.startsWith("gpu_"),
+          "Now for NVDataset, xgboost-spark only supports tree_method as " +
+            s"[${BoosterParams.supportedTreeMethods.filter(_.startsWith("gpu_")).mkString(", ")}]" +
+            s", but found '$tmValue'")
+      }
+    } else {
+      // Add "gpu_hist" as default for GPU training if not set
+      updatedParams = updatedParams + (treeMethod -> "gpu_hist")
     }
-    updatedParams = updatedParams + (treeMethod -> "gpu_hist")
     updatedParams
   }
 

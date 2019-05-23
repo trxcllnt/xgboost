@@ -284,7 +284,7 @@ private[spark] object BoosterParams {
 
   val supportedBoosters = HashSet("gbtree", "gblinear", "dart")
 
-  val supportedTreeMethods = HashSet("auto", "exact", "approx", "hist", "gpu_hist")
+  val supportedTreeMethods = HashSet("auto", "exact", "approx", "hist", "gpu_hist", "gpu_exact")
 
   val supportedGrowthPolicies = HashSet("depthwise", "lossguide")
 
