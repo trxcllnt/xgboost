@@ -63,7 +63,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     assert(0 < ret && ret < 20)
   }
 
-  test("NV Regression XGBoost-Spark XGBoostRegressor ouput should match XGBoost4j") {
+  test("NV Regression XGBoost-Spark XGBoostRegressor output should match XGBoost4j") {
     val (trainFeaturesHandle, trainLabelsHandle) = NVDatasetData.regressionTrain
     assert(trainFeaturesHandle.nonEmpty)
     assert(trainFeaturesHandle.size == 3)
