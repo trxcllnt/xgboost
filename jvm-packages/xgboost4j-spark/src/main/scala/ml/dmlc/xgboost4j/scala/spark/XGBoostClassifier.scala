@@ -19,7 +19,6 @@ package ml.dmlc.xgboost4j.scala.spark
 import scala.collection.Iterator
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-
 import ml.dmlc.xgboost4j.java.Rabit
 import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
@@ -27,7 +26,6 @@ import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import ml.dmlc.xgboost4j.scala.spark.params._
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.hadoop.fs.Path
-
 import org.apache.spark.TaskContext
 import org.apache.spark.ml.attribute._
 import org.apache.spark.ml.classification._
@@ -40,7 +38,6 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.apache.spark.sql._
 import org.json4s.DefaultFormats
-
 import org.apache.spark.broadcast.Broadcast
 
 private[spark] trait XGBoostClassifierParams extends GeneralParams with LearningTaskParams
@@ -328,6 +325,60 @@ class XGBoostClassificationModel private[ml](
     throw new Exception("XGBoost-Spark does not support \'raw2probabilityInPlace\'")
   }
 
+  private def transformInternal(dataset: NVDataset): DataFrame = {
+    val schema = StructType(dataset.schema.fields ++
+      Seq(StructField(name = _rawPredictionCol, dataType =
+        ArrayType(FloatType, containsNull = false), nullable = false)) ++
+      Seq(StructField(name = _probabilityCol, dataType =
+        ArrayType(FloatType, containsNull = false), nullable = false)))
+
+    val bBooster = dataset.sparkSession.sparkContext.broadcast(_booster)
+    val appName = dataset.sparkSession.sparkContext.appName
+
+    val derivedXGBParamMap = MLlib2XGBoostParams
+    var featuresColNames = derivedXGBParamMap.getOrElse("features_cols", Nil)
+      .asInstanceOf[Seq[String]]
+
+    val indices = Seq(featuresColNames.toArray).map(
+      _.filter(schema.fieldNames.contains).map(schema.fieldIndex)
+    )
+
+    require(indices(0).length == featuresColNames.length,
+      "Features column(s) in schema do NOT match the one(s) in parameters. " +
+        s"Expect [${featuresColNames.mkString(", ")}], " +
+        s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
+
+    val predictionRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
+      val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+
+      val gdfColsHandles = indices.map(_.map(nvColumnBatch.getColumn))
+      val dm = new DMatrix(gdfColsHandles(0))
+
+      Rabit.init(rabitEnv.asJava)
+      try {
+        val Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr) =
+          producePredictionItrs(bBooster, dm)
+        Iterator(rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
+      } finally {
+        Rabit.shutdown()
+        dm.delete()
+      }
+    })
+
+    val resultRDD = dataset.zipPartitionsAsRows(predictionRDD, preservesPartitioning = true) {
+      case (inputIterator, predictionItr) =>
+        if (inputIterator.hasNext) {
+          produceResultIterator(inputIterator, predictionItr.next(), predictionItr.next(),
+            predictionItr.next(), predictionItr.next())
+        } else {
+          Iterator()
+        }
+    }
+
+    bBooster.unpersist(blocking = false)
+    dataset.sparkSession.createDataFrame(resultRDD, generateResultSchema(schema))
+  }
+
   // Generate raw prediction and probability prediction.
   private def transformInternal(dataset: Dataset[_]): DataFrame = {
 
@@ -458,6 +509,66 @@ class XGBoostClassificationModel private[ml](
       }
     }
     Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
+  }
+
+  def transform(dataset: NVDataset): DataFrame = {
+    // transformSchema(dataset.schema, logging = true)
+    if (isDefined(thresholds)) {
+      require($(thresholds).length == numClasses, this.getClass.getSimpleName +
+        ".transform() called with non-matching numClasses and thresholds.length." +
+        s" numClasses=$numClasses, but thresholds has length ${$(thresholds).length}")
+    }
+
+    // Output selected columns only.
+    // This is a bit complicated since it tries to avoid repeated computation.
+    var outputData = transformInternal(dataset)
+    var numColsOutput = 0
+
+    val rawPredictionUDF = udf { rawPrediction: mutable.WrappedArray[Float] =>
+      val raw = rawPrediction.map(_.toDouble).toArray
+      val rawPredictions = if (numClasses == 2) Array(-raw(0), raw(0)) else raw
+      Vectors.dense(rawPredictions)
+    }
+
+    val probabilityUDF = udf { probability: mutable.WrappedArray[Float] =>
+      val prob = probability.map(_.toDouble).toArray
+      val probabilities = if (numClasses == 2) Array(1.0 - prob(0), prob(0)) else prob
+      Vectors.dense(probabilities)
+    }
+
+    val predictUDF = udf { probability: mutable.WrappedArray[Float] =>
+      // From XGBoost probability to MLlib prediction
+      val prob = probability.map(_.toDouble).toArray
+      val probabilities = if (numClasses == 2) Array(1.0 - prob(0), prob(0)) else prob
+      probability2prediction(Vectors.dense(probabilities))
+    }
+
+    if ($(rawPredictionCol).nonEmpty) {
+      outputData = outputData
+        .withColumn(getRawPredictionCol, rawPredictionUDF(col(_rawPredictionCol)))
+      numColsOutput += 1
+    }
+
+    if ($(probabilityCol).nonEmpty) {
+      outputData = outputData
+        .withColumn(getProbabilityCol, probabilityUDF(col(_probabilityCol)))
+      numColsOutput += 1
+    }
+
+    if ($(predictionCol).nonEmpty) {
+      outputData = outputData
+        .withColumn($(predictionCol), predictUDF(col(_probabilityCol)))
+      numColsOutput += 1
+    }
+
+    if (numColsOutput == 0) {
+      this.logWarning(s"$uid: ProbabilisticClassificationModel.transform() was called as NOOP" +
+        " since no output columns were set.")
+    }
+    outputData
+      .toDF
+      .drop(col(_rawPredictionCol))
+      .drop(col(_probabilityCol))
   }
 
   override def transform(dataset: Dataset[_]): DataFrame = {

@@ -17,8 +17,10 @@
 package ml.dmlc.xgboost4j.scala.spark
 
 import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataReader
+import ml.dmlc.xgboost4j.scala.{DMatrix, XGBoost => ScalaXGBoost}
+import org.apache.spark.ml.linalg.{DenseVector, Vectors}
+import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{FloatType, IntegerType, StructType}
-import org.apache.spark.ml.linalg.Vectors
 import org.scalatest.FunSuite
 
 class XGBoostClassifierNVSuite extends FunSuite with PerTest {
@@ -31,6 +33,11 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     "num_round" -> 50,
     "num_workers" -> 1,
     "timeout_request_workers" -> 60000L))
+
+  override def afterEach(): Unit = {
+    super.afterEach()
+    NVDatasetData.classifierCleanUp()
+  }
 
   test("test XGBoost-Spark XGBoostClassifier setFeaturesCols") {
     val gdfCols = Seq("gdfCol1", "gdfCol2")
@@ -59,5 +66,279 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret && ret < 5)
+  }
+
+  test("NV Classifier XGBoost-Spark XGBoostClassifier output should match XGBoost4j") {
+    val (trainFeaturesHandle, trainLabelsHandle) = NVDatasetData.classifierTrain
+    assert(trainFeaturesHandle.nonEmpty)
+    assert(trainFeaturesHandle.size == 4)
+    assert(trainLabelsHandle.nonEmpty)
+    assert(trainLabelsHandle.size == 1)
+
+    val trainingDM = new DMatrix(trainFeaturesHandle)
+    trainingDM.setCUDFInfo("label", trainLabelsHandle)
+
+    val (testFeaturesHandle, _) = NVDatasetData.classifierTest
+    assert(testFeaturesHandle.nonEmpty)
+    assert(testFeaturesHandle.size == 4)
+
+    val testDM = new DMatrix(testFeaturesHandle)
+
+    val round = 100
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val model1 = ScalaXGBoost.train(trainingDM, paramMap, round)
+    val prediction1 = model1.predict(testDM)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val model2 = new XGBoostClassifier(paramMap ++ Array("num_round" -> round,
+      "num_workers" -> 1))
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+      .fit(trainingDF)
+
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val prediction2 = model2.transform(testDF)
+      .collect().map(row => row.getAs[DenseVector]("probability"))
+
+    // the vector length in probability column is 2 since we have to fit to the evaluator in Spark
+    assert(testRows === prediction2.size)
+    for (i <- prediction1.indices) {
+      assert(prediction1(i).length === prediction2(i).values.length)
+      for (j <- prediction1(i).indices) {
+        assert(prediction1(i)(j) === prediction2(i)(j))
+      }
+    }
+
+    val prediction3 = model1.predict(testDM, outPutMargin = true)
+    val prediction4 = model2.transform(testDF).
+      collect().map(row => row.getAs[DenseVector]("rawPrediction"))
+
+    // the vector length in rawPrediction column is 2 since we have to fit to the evaluator in Spark
+    assert(testRows === prediction4.size)
+    for (i <- prediction3.indices) {
+      assert(prediction3(i).length === prediction4(i).values.length)
+      for (j <- prediction3(i).indices) {
+        assert(prediction3(i)(j) === prediction4(i)(j))
+      }
+    }
+
+    trainingDM.delete()
+    testDM.delete()
+  }
+
+  test("NV Classifier Set params in XGBoost and MLlib way should produce same model") {
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val round = 100
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16,
+      "features_cols" -> featureCols,
+      "label_col" -> "classIndex")
+
+    // Set params in XGBoost way
+    val model1 = new XGBoostClassifier(paramMap)
+      .fit(trainingDF)
+
+    // Set params in MLlib way
+    val model2 = new XGBoostClassifier()
+      .setEta(0.1f)
+      .setMaxDepth(2)
+      .setObjective("multi:softprob")
+      .setNumRound(round)
+      .setNumClass(3)
+      .setNumWorkers(1)
+      .setMaxBins(16)
+      .setTreeMethod("gpu_hist")
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+      .fit(trainingDF)
+
+    val prediction1 = model1.transform(testDF).select("prediction").collect()
+    val prediction2 = model2.transform(testDF).select("prediction").collect()
+
+    prediction1.zip(prediction2).foreach { case (Row(p1: Double), Row(p2: Double)) =>
+      assert(p1 === p2)
+    }
+  }
+
+  test("NV Classifier test schema of XGBoostClassificationModel") {
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val model = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+      .fit(trainingDF)
+
+    model.setRawPredictionCol("raw_prediction")
+      .setProbabilityCol("probability_prediction")
+      .setPredictionCol("final_prediction")
+    var predictionDF = model.transform(testDF)
+    assert(predictionDF.columns.contains("sepal length"))
+    assert(predictionDF.columns.contains("classIndex"))
+    assert(predictionDF.columns.contains("raw_prediction"))
+    assert(predictionDF.columns.contains("probability_prediction"))
+    assert(predictionDF.columns.contains("final_prediction"))
+    model.setRawPredictionCol("").setPredictionCol("final_prediction")
+    predictionDF = model.transform(testDF)
+    assert(predictionDF.columns.contains("raw_prediction") === false)
+    assert(predictionDF.columns.contains("final_prediction"))
+    model.setRawPredictionCol("raw_prediction").setPredictionCol("")
+    predictionDF = model.transform(testDF)
+    assert(predictionDF.columns.contains("raw_prediction"))
+    assert(predictionDF.columns.contains("final_prediction") === false)
+
+    assert(model.summary.trainObjectiveHistory.length === 100)
+    assert(model.summary.validationObjectiveHistory.isEmpty)
+  }
+
+  test("NV Classifier test predictionLeaf") {
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val groundTruth = testRows
+    val xgb = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+    val model = xgb.fit(trainingDF)
+    model.setLeafPredictionCol("predictLeaf")
+    val resultDF = model.transform(testDF)
+    assert(resultDF.count == groundTruth)
+    assert(resultDF.columns.contains("predictLeaf"))
+  }
+
+  test("NV Classifier test predictionLeaf with empty column name") {
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val xgb = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+    val model = xgb.fit(trainingDF)
+    model.setLeafPredictionCol("")
+    val resultDF = model.transform(testDF)
+    assert(!resultDF.columns.contains("predictLeaf"))
+  }
+
+  test("NV Classifier test predictionContrib") {
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val groundTruth = testRows
+    val xgb = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+    val model = xgb.fit(trainingDF)
+    model.setContribPredictionCol("predictContrib")
+    val resultDF = model.transform(testDF)
+    assert(resultDF.count == groundTruth)
+    assert(resultDF.columns.contains("predictContrib"))
+  }
+
+  test("NV Classifier test predictionContrib with empty column name") {
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val xgb = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+    val model = xgb.fit(trainingDF)
+    model.setContribPredictionCol("")
+    val resultDF = model.transform(testDF)
+    assert(!resultDF.columns.contains("predictContrib"))
+  }
+
+  test("NV Classifier test predictionLeaf and predictionContrib") {
+    val paramMap = Map("eta" -> 0.1f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_class" -> 3,
+      "num_round" -> 100,
+      "num_workers" -> 1,
+      "tree_method" -> "gpu_hist",
+      "max_bin" -> 16)
+
+    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
+    val featureCols = NVDatasetData.classifierFeatureCols
+    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+
+    val groundTruth = testRows
+    val xgb = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(featureCols)
+      .setLabelCol("classIndex")
+    val model = xgb.fit(trainingDF)
+    model.setLeafPredictionCol("predictLeaf")
+    model.setContribPredictionCol("predictContrib")
+    val resultDF = model.transform(testDF)
+    assert(resultDF.count == groundTruth)
+    assert(resultDF.columns.contains("predictLeaf"))
+    assert(resultDF.columns.contains("predictContrib"))
   }
 }
