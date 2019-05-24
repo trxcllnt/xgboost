@@ -27,6 +27,13 @@ class NVDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
 
+  override def sparkSessionBuilder: SparkSession.Builder = SparkSession.builder()
+      .master("local[1]")
+      .appName("NVDatasetSuite")
+      .config("spark.ui.enabled", false)
+      .config("spark.driver.memory", "512m")
+      .config("spark.task.cpus", 1)
+
   test("mapColumnarSingleBatchPerPartition") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new NVDataReader(ss)
@@ -89,6 +96,21 @@ class NVDatasetSuite extends FunSuite with PerTest {
     assertResult(1) { counts.length }
     assertResult(5) { counts(0)._1 }
     assertResult(10) { counts(0)._2 }
+  }
+
+  test("CSV multifile partition") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new NVDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d INT"
+    val path = getTestDataPath("/multifile-norank-train-csv")
+    val dataset = reader.schema(csvSchema).csv(path)
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+      Iterator.single((b.getNumColumns, b.getNumRows)))
+    assertResult(1) { rdd.partitions.length }
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(4) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
   }
 
   test("Parquet parsing") {
