@@ -20,6 +20,7 @@ import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
 
@@ -173,6 +174,73 @@ class NVDatasetSuite extends FunSuite with PerTest {
     assert(lastRow.getDouble(2) === 50.810461183)
     assert(lastRow.getDouble(3) === 3.00863325197)
     assertResult(20) { lastRow.get(4) }
+  }
+
+  test("repartition to 1") {
+    val partFiles = Array(
+      PartitionedFile(null, "/a", 0, 123),
+      PartitionedFile(null, "/b", 0, 456),
+      PartitionedFile(null, "/c", 0, 789),
+      PartitionedFile(null, "/d", 0, 2468),
+      PartitionedFile(null, "/e", 0, 3579),
+      PartitionedFile(null, "/f", 0, 12345),
+      PartitionedFile(null, "/g", 0, 67890)
+    )
+    val oldPartitions = Seq(
+      FilePartition(0, Seq(partFiles(0))),
+      FilePartition(1, partFiles.slice(1, 4)),
+      FilePartition(2, partFiles.slice(4, 6)),
+      FilePartition(3, Seq(partFiles(6)))
+    )
+    val oldset = new NVDataset(null, null, null, Some(oldPartitions))
+    val newset = oldset.repartition(1)
+    assertResult(1)(newset.partitions.length)
+    assertResult(0)(newset.partitions(0).index)
+    val newPartFiles = newset.partitions(0).files
+    assertResult(7)(newPartFiles.length)
+    for (f <- partFiles) {
+      assert(newPartFiles.contains(f))
+    }
+  }
+
+  test("repartition") {
+    val partFiles = Array(
+      PartitionedFile(null, "/a", 0, 1230),
+      PartitionedFile(null, "/b", 0, 4560),
+      PartitionedFile(null, "/c", 0, 7890),
+      PartitionedFile(null, "/d", 0, 2468),
+      PartitionedFile(null, "/e", 0, 3579),
+      PartitionedFile(null, "/f", 0, 12345),
+      PartitionedFile(null, "/g", 0, 67890)
+    )
+    val oldPartitions = Seq(
+      FilePartition(0, Seq(partFiles(0))),
+      FilePartition(1, partFiles.slice(1, 4)),
+      FilePartition(2, partFiles.slice(4, 6)),
+      FilePartition(3, Seq(partFiles(6)))
+    )
+    val oldset = new NVDataset(null, null, null, Some(oldPartitions))
+    val newset = oldset.repartition(3)
+    assertResult(3)(newset.partitions.length)
+    for (i <- 0 until 3) {
+      assertResult(i)(newset.partitions(i).index)
+    }
+    assert(newset.partitions(0).files.contains(partFiles(6)))
+    assert(newset.partitions(1).files.contains(partFiles(5)))
+    assert(newset.partitions(2).files.contains(partFiles(2)))
+    assert(newset.partitions(2).files.contains(partFiles(1)))
+    assert(newset.partitions(1).files.contains(partFiles(4)))
+    assert(newset.partitions(2).files.contains(partFiles(3)))
+    assert(newset.partitions(2).files.contains(partFiles(0)))
+  }
+
+  test("repartition more than number of files") {
+    val oldPartitions = Seq(
+      FilePartition(0, Seq(PartitionedFile(null, "/a/b/c", 0, 123))),
+      FilePartition(1, Seq(PartitionedFile(null, "/a/b/d", 0, 456)))
+    )
+    val nvds = new NVDataset(null, null, null, Some(oldPartitions))
+    assertThrows[UnsupportedOperationException] { nvds.repartition(3) }
   }
 
   private def getTestDataPath(resource: String): String = {

@@ -35,6 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.unsafe.Platform
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
@@ -84,16 +85,36 @@ class NVDataset(fsRelation: HadoopFsRelation,
 
   /** Return a new NVDataset that has exactly numPartitions partitions. */
   def repartition(numPartitions: Int): NVDataset = {
-    if (numPartitions != partitions.length) {
-      throw new UnsupportedOperationException("repartition not implemented yet")
+    if (numPartitions == partitions.length) {
+      return new NVDataset(fsRelation, sourceType, sourceOptions, Some(partitions))
     }
-    new NVDataset(fsRelation, sourceType, sourceOptions, Some(partitions))
+
+    // build a list of all input files sorted from largest to smallest
+    val files = partitions.flatMap(_.files).sortBy(_.length)(Ordering[Long].reverse)
+    // Currently do not support splitting files
+    if (files.length < numPartitions) {
+      throw new UnsupportedOperationException("Cannot create more partitions than input files")
+    }
+
+    // Seed the partition buckets with one of the largest files then iterate
+    // through the rest of the files, adding each to the smallest bucket
+    val buckets = files.take(numPartitions).map(new NVDataset.PartBucket(_))
+    def bucketOrder(b: NVDataset.PartBucket) = -b.getSize
+    val queue = mutable.PriorityQueue(buckets: _*)(Ordering.by(bucketOrder))
+    for (file <- files.drop(numPartitions)) {
+      val bucket = queue.dequeue()
+      bucket.addFile(file)
+      queue.enqueue(bucket)
+    }
+
+    val newPartitions = buckets.zipWithIndex.map{case (b, i) => b.toFilePartition(i)}
+    new NVDataset(fsRelation, sourceType, sourceOptions, Some(newPartitions))
   }
 
   /** The SparkSession that created this NVDataset. */
   def sparkSession: SparkSession = fsRelation.sparkSession
 
-  private lazy val partitions: Seq[FilePartition] = specifiedPartitions.getOrElse({
+  private[nvidia] lazy val partitions: Seq[FilePartition] = specifiedPartitions.getOrElse{
     val selectedPartitions = fsRelation.location.listFiles(Nil, Nil)
     val openCostInBytes = fsRelation.sparkSession.sessionState.conf.filesOpenCostInBytes
     val maxSplitBytes = computeMaxSplitBytes(fsRelation.sparkSession, selectedPartitions)
@@ -119,7 +140,7 @@ class NVDataset(fsRelation: HadoopFsRelation,
 
     val partitions = getFilePartitions(fsRelation.sparkSession, splits, maxSplitBytes)
     partitions
-  })
+  }
 
   private def getFilePartitions(
       sparkSession: SparkSession,
@@ -195,7 +216,7 @@ class NVDataset(fsRelation: HadoopFsRelation,
 
   private def getBlockLocations(file: FileStatus): Array[BlockLocation] = file match {
     case f: LocatedFileStatus => f.getBlockLocations
-    case f => Array.empty[BlockLocation]
+    case _ => Array.empty[BlockLocation]
   }
 
   // Given locations of all blocks of a single file, `blockLocations`, and an `(offset, length)`
@@ -392,7 +413,7 @@ object NVDataset {
   private def buildParquetOptions(options: Map[String, String],
       schema: StructType): ParquetOptions = {
     // currently no Parquet read options are supported
-    if (!options.isEmpty) {
+    if (options.nonEmpty) {
       throw new UnsupportedOperationException("No Parquet read options are supported")
     }
     val builder = ParquetOptions.builder()
@@ -529,4 +550,18 @@ object NVDataset {
     "quote" -> parseCSVQuoteOption,
     "sep" -> parseCSVSepOption
   )
+
+  private class PartBucket(initFile: PartitionedFile) {
+    private val files: ArrayBuffer[PartitionedFile] = ArrayBuffer(initFile)
+    private var size = initFile.length
+
+    def getSize: Long = size
+
+    def addFile(file: PartitionedFile): Unit = {
+      files += file
+      size += file.length
+    }
+
+    def toFilePartition(index: Int): FilePartition = FilePartition(index, files)
+  }
 }
