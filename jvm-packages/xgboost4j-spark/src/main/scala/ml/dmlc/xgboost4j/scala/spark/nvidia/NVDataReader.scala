@@ -196,3 +196,7 @@ class NVDataReader(sparkSession: SparkSession) {
     "org.apache.spark.sql.execution.datasources.parquet.DefaultSource" -> "parquet"
   )
 }
+
+object NVDataReader {
+  def apply(spark: SparkSession): NVDataReader = new NVDataReader(spark)
+}
