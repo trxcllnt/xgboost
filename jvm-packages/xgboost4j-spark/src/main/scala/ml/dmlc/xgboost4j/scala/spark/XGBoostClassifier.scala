@@ -25,6 +25,7 @@ import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import ml.dmlc.xgboost4j.scala.spark.params._
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
+import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import org.apache.hadoop.fs.Path
 import org.apache.spark.TaskContext
 import org.apache.spark.ml.attribute._
@@ -207,7 +208,7 @@ class XGBoostClassifier (
 
   override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
 
-  private def getNumberClasses(labelSchema: StructField, maxNumClass: Int = 100): Int = {
+  private def getNumberClasses(dataset: NVDataset, maxNumClass: Int = 100): Int = {
      /*
       * Now NVDataset does not support to get classes number,
       * So try to figure it out in this order:
@@ -215,6 +216,7 @@ class XGBoostClassifier (
       * 2) From evalMetric
       * 3) From param 'numClass'
       */
+    val labelSchema = dataset.schema($(labelCol))
     val classNum = Attribute.fromStructField(labelSchema) match {
       case binAttr: BinaryAttribute => Some(2)
       case nomAttr: NominalAttribute => nomAttr.getNumValues
@@ -230,8 +232,22 @@ class XGBoostClassifier (
         // The returned value is used by model, should be 2 for binary classification
         Some(if (innerClassNum == 3) $(numClass) else innerClassNum)
       } else {
-        require(innerClassNum == 2, "Param 'num_class' should be set for multiple classification!")
-        None
+        if (innerClassNum != 2) {
+          // Attempt to automatically detect the number of classes from the label data.
+          val numClasses = dataset.findNumClasses($(labelCol))
+          require(numClasses <= maxNumClass, s"Classifier inferred $numClasses from label values" +
+            s" in column $labelCol, but this exceeded the max numClasses ($maxNumClass) allowed" +
+            s" to be inferred from values.  To avoid this error for labels with > $maxNumClass" +
+            s" classes, specify numClasses explicitly in the metadata; this can be done by" +
+            s" applying StringIndexer to the label column.")
+          logInfo(this.getClass.getCanonicalName + s" inferred $numClasses classes for" +
+            s" labelCol=$labelCol since numClasses was not specified in the column metadata.")
+          Some(numClasses)
+        } else {
+          require(innerClassNum == 2,
+            "Param 'num_class' should be set for multiple classification!")
+          None
+        }
       }
       paramClassNum orElse Some(innerClassNum)
     } get
@@ -244,7 +260,7 @@ class XGBoostClassifier (
     if (isDefined(customObj) && $(customObj) != null) {
       set(objectiveType, "classification")
     }
-    val _numClasses = getNumberClasses(dataset.schema($(labelCol)))
+    val _numClasses = getNumberClasses(dataset)
     this.logInfo(s"Got 'numClass'=${_numClasses} for NVDataset")
     val derivedXGBParamMap = MLlib2XGBoostParams
     val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap,

@@ -57,8 +57,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
 
-    // num_class is required for multiple classification
-    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+    // num classes can be automatically detected
+    nvClassifier.fit(trainDataAsNVDS)
+
     // Invalid num_class
     nvClassifier.setNumClass(-1)
     assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
