@@ -207,7 +207,7 @@ class XGBoostClassifier (
 
   override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
 
-  private def getNumberClasses(labelSchema: StructField): Int = {
+  private def getNumberClasses(labelSchema: StructField, maxNumClass: Int = 100): Int = {
      /*
       * Now NVDataset does not support to get classes number,
       * So try to figure it out in this order:
@@ -245,10 +245,10 @@ class XGBoostClassifier (
       set(objectiveType, "classification")
     }
     val _numClasses = getNumberClasses(dataset.schema($(labelCol)))
-    println(s"Got 'numClass'=${_numClasses} for NVDataset")
+    this.logInfo(s"Got 'numClass'=${_numClasses} for NVDataset")
     val derivedXGBParamMap = MLlib2XGBoostParams
-    // No eval Dataset now
-    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap)
+    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap,
+      getNvEvalSets(xgboostParams), false)
     val model = new XGBoostClassificationModel(uid, _numClasses, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)

@@ -25,29 +25,28 @@ import org.scalatest.FunSuite
 
 class XGBoostRegressorNVSuite extends FunSuite with PerTest {
 
-  private val NVRegressor = new XGBoostRegressor(Map(
-    "silent" -> 1,
-    "eta" -> 0.1f,
-    "max_depth" -> 3,
-    "objective" -> "reg:squarederror",
-    "num_round" -> 50,
-    "num_workers" -> 1,
-    "timeout_request_workers" -> 60000L))
-
   override def afterEach(): Unit = {
     super.afterEach()
     NVDatasetData.regressionCleanUp()
   }
 
   test("test XGBoost-Spark XGBoostRegressor setFeaturesCols") {
-    val gdfCols = Seq("gdfCol1", "gdfCol2")
-    NVRegressor.setFeaturesCols(gdfCols)
-    assert(NVRegressor.getFeaturesCols.contains("gdfCol1"))
-    assert(NVRegressor.getFeaturesCols.contains("gdfCol2"))
-    assert(NVRegressor.getFeaturesCols.length == 2)
+    val nvRegressor = new XGBoostRegressor(Map("objective" -> "reg:squarederror"))
+      .setFeaturesCols(Seq("gdfCol1", "gdfCol2"))
+    assert(nvRegressor.getFeaturesCols.contains("gdfCol1"))
+    assert(nvRegressor.getFeaturesCols.contains("gdfCol2"))
+    assert(nvRegressor.getFeaturesCols.length == 2)
   }
 
   test("test XGBoost-Spark XGBoostRegressor the overloaded 'fit' should work with NVDataset") {
+    val paramMap = Map(
+      "silent" -> 1,
+      "eta" -> 0.1f,
+      "max_depth" -> 3,
+      "objective" -> "reg:squarederror",
+      "num_round" -> 50,
+      "num_workers" -> 1,
+      "timeout_request_workers" -> 60000L)
     val csvSchema = new StructType()
       .add("b", DoubleType)
       .add("c", DoubleType)
@@ -55,12 +54,31 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       .add("e", IntegerType)
     // group now is not supported
     val trainDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
-    NVRegressor.setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
-    NVRegressor.setLabelCol("e")
-    val model = NVRegressor.fit(trainDataAsNVDS)
+    val nvRegressor = new XGBoostRegressor(paramMap)
+      .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
+      .setLabelCol("e")
+    val model = nvRegressor.fit(trainDataAsNVDS)
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret && ret < 20)
+
+    // Train with eval set(s)
+    val evalDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
+    // 1) Set via xgboost ML API
+    nvRegressor.setNvEvalSets(Map("test" -> evalDataAsNVDS))
+    val model2 = nvRegressor.fit(trainDataAsNVDS)
+    val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
+    // Allow big range since we don't care the accuracy
+    assert(0 < ret2 && ret2 < 20)
+    // 2) Set via param map
+    val model3 = new XGBoostRegressor(paramMap ++ Array(
+      "eval_sets" -> Map("test" -> evalDataAsNVDS)))
+      .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
+      .setLabelCol("e")
+      .fit(trainDataAsNVDS)
+    val ret3 = model3.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
+    assert(0 < ret3 && ret3 < 20)
+    assert(ret2 === ret3)
   }
 
   test("NV Regression XGBoost-Spark XGBoostRegressor output should match XGBoost4j") {

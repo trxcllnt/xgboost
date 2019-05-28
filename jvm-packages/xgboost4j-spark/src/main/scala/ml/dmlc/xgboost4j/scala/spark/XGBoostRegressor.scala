@@ -210,8 +210,9 @@ class XGBoostRegressor (
     }
 
     val derivedXGBParamMap = MLlib2XGBoostParams
-    // No eval Dataset now, no group support
-    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap)
+    // No group support for NVDataset
+    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap,
+      getNvEvalSets(xgboostParams), false)
     val model = new XGBoostRegressionModel(uid, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)

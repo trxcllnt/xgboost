@@ -16,6 +16,7 @@
 
 package ml.dmlc.xgboost4j.scala.spark.params
 
+import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import org.apache.spark.sql.DataFrame
 
 trait NonParamVariables {
@@ -31,6 +32,29 @@ trait NonParamVariables {
       params("eval_sets").asInstanceOf[Map[String, DataFrame]]
     } else {
       evalSetsMap
+    }
+  }
+
+  protected var nvEvalSetsMap: Map[String, NVDataset] = Map.empty
+
+  def setNvEvalSets(evalSets: Map[String, NVDataset]): this.type = {
+    nvEvalSetsMap = evalSets
+    this
+  }
+
+  def getNvEvalSets(params: Map[String, Any]): Map[String, NVDataset] = {
+    // To minimize the change in apps, we share the same "eval_sets" with cpu.
+    // Then NO code update is needed for the eval parameter part, just get the eval
+    // sets as NVDatasets.
+    if (params.contains("eval_sets")) {
+      val nvEvals = params("eval_sets").asInstanceOf[Map[String, NVDataset]]
+      // Do value type check here because the above just checks the first layer: Map,
+      // even specifying the types for both key and value.
+      require(nvEvals.values.forall(_.isInstanceOf[NVDataset]),
+        "Wrong type for value! Evaluation sets should be Map(name: String -> NVDataset) for GPU.")
+      nvEvals.asInstanceOf[Map[String, NVDataset]]
+    } else {
+      nvEvalSetsMap
     }
   }
 }

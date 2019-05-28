@@ -18,13 +18,10 @@ package ml.dmlc.xgboost4j.scala.spark
 
 import java.io.File
 import java.nio.file.Files
-import java.util.Properties
 
-import scala.collection.mutable.ListBuffer
 import scala.collection.{AbstractIterator, mutable}
 import scala.util.Random
 import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, RabitTracker => PyRabitTracker}
-import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
 import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.scala.spark.params.BoosterParams
@@ -33,11 +30,10 @@ import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.io.FileUtils
 import org.apache.commons.logging.LogFactory
 import org.apache.spark.rdd.RDD
-import org.apache.spark.{SparkContext, SparkException, SparkParallelismTracker, TaskContext}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.{SparkContext, SparkParallelismTracker, TaskContext}
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.storage.StorageLevel
-
 
 /**
  * Rabit tracker configurations.
@@ -69,8 +65,13 @@ private[spark] case class XGBLabeledPointGroup(
     points: Array[XGBLabeledPoint],
     isEdgeGroup: Boolean)
 
+private case class GDFColumnData(
+    rawDataset: NVDataset,
+    colsIndices: Seq[Array[Int]])
+
 object XGBoost extends Serializable {
   private val logger = LogFactory.getLog("XGBoostSpark")
+  private val trainName = "train"
 
   private def verifyMissingSetting(xgbLabelPoints: Iterator[XGBLabeledPoint], missing: Float):
       Iterator[XGBLabeledPoint] = {
@@ -152,7 +153,6 @@ object XGBoost extends Serializable {
       // this might not be the best efficient implementation, see
       // (https://github.com/dmlc/xgboost/issues/1277)
       val dmMap = watches.toMap
-      val trainName = "train"
       if (!dmMap.contains(trainName) || dmMap(trainName).rowNum == 0) {
         throw new XGBoostError(
           s"detected an empty partition in the training data, partition ID:" +
@@ -166,9 +166,8 @@ object XGBoost extends Serializable {
         }
       }
       val metrics = Array.tabulate(watches.size)(_ => Array.ofDim[Float](round))
-      val booster = SXGBoost.train(watches.toMap(trainName), params, round,
-        watches.toMap, metrics, obj, eval,
-        earlyStoppingRound = numEarlyStoppingRounds, prevBooster)
+      val booster = SXGBoost.train(dmMap(trainName), params, round, dmMap - trainName,
+        metrics, obj, eval, earlyStoppingRound = numEarlyStoppingRounds, prevBooster)
       Iterator(booster -> watches.toMap.keys.zip(metrics).toMap)
     } finally {
       Rabit.shutdown()
@@ -297,8 +296,8 @@ object XGBoost extends Serializable {
     }
     if (params.contains("train_test_ratio")) {
       logger.warn("train_test_ratio is deprecated since XGBoost 0.82, we recommend to explicitly" +
-        " pass a training and multiple evaluation datasets by passing 'eval_sets' and " +
-        "'eval_set_names'")
+        " pass a training and multiple evaluation datasets by passing 'eval_sets' as" +
+        " Map('name'->'Dataset') for CPU or Map('name'->'NVDataset') for GPU.")
     }
     require(nWorkers > 0, "you must specify more than 0 workers")
     if (obj != null) {
@@ -426,7 +425,7 @@ object XGBoost extends Serializable {
   }
 
   private def checkAndGetGDFColumnIndices(schema: StructType, params: Map[String, Any]):
-    Seq[Array[Int]] = {
+      Seq[Array[Int]] = {
     val featuresColNames = params.getOrElse("features_cols", Seq("features"))
       .asInstanceOf[Seq[String]]
     val labelColName = params.getOrElse("label_col", "label").asInstanceOf[String]
@@ -434,7 +433,6 @@ object XGBoost extends Serializable {
     val indices = Seq(featuresColNames.toArray, Array(labelColName), Array(weightColName)).map(
       _.filter(schema.fieldNames.contains).map(schema.fieldIndex)
     )
-
     require(indices(0).length == featuresColNames.length,
       "Features column(s) in schema do NOT match the one(s) in parameters. " +
       s"Expect [${featuresColNames.mkString(", ")}], " +
@@ -447,29 +445,92 @@ object XGBoost extends Serializable {
     indices
   }
 
+  // repartition all the NVDatasets (training and evaluation) to nWorkers,
+  // And get the GDF column indices separately from each NVDataset.
+  // Then wrap the NVDatasets and its indices into a map
+  private def prepareDataForNVDataset(
+      trainingData: NVDataset,
+      evalSetsMap: Map[String, NVDataset],
+      nWorkers: Int,
+      hasGroup: Boolean,
+      params: Map[String, Any]): Map[String, GDFColumnData] = {
+    // Group check
+    require(!hasGroup, "Group is NOT supported yet for NVDataset")
+    // Cache is not supported
+    val isCacheData = params.getOrElse("cacheTrainingSet", false).asInstanceOf[Boolean]
+    if (isCacheData) {
+      logger.warn("Data cache is not support for NVDataset!")
+    }
+    (evalSetsMap + (trainName -> trainingData)).map {
+      case (name, nvDataset) =>
+        // Always repartition due to not easy to get the current number of
+        // partitions from NVDataset directly, just let NVDataset handle all the cases.
+        val newNvDatset = nvDataset.repartition(nWorkers)
+        // Check and get gdf columns for all NVDataset(s)
+        name -> GDFColumnData(newNvDatset, checkAndGetGDFColumnIndices(newNvDatset.schema, params))
+    }
+  }
+
+  // zip all the NVDatasetRDDs from NVDatasets into one RDD containing named GDF column
+  // native handles.
+  // The transformation from column indices to native handle is done during the zipping process.
+  private def coPartitionForNVDataset(
+      dataMap: Map[String, GDFColumnData],
+      sc: SparkContext,
+      nWorkers: Int): RDD[(String, Seq[Array[Long]])] = {
+    val emptyDataRdd = sc.parallelize(Array.fill[(String, Seq[Array[Long]])](nWorkers)(null),
+      nWorkers)
+    dataMap.foldLeft(emptyDataRdd) {
+      case (zippedRdd, (name, gdfColData)) =>
+        val colIndices = gdfColData.colsIndices
+        zippedRdd.zipPartitions(gdfColData.rawDataset.buildRDD) {
+          (itWrapper, itColBatch) =>
+            if (itColBatch.isEmpty) {
+              logger.error("When specifying eval sets as NVDataset, you have to ensure that " +
+                "the number of elements in each NVDataset is larger than the number of workers")
+              throw new Exception("Too few elements in evaluation sets!")
+            }
+            // Convert indices to native handles.
+            // Suppose only one NvColumnBatch for each partition
+            val columnBatch = itColBatch.next
+            val handles = colIndices.map(_.map(columnBatch.getColumn))
+            (itWrapper.toArray :+ (name -> handles)).filter(_ != null).iterator
+        }
+    }
+  }
+
   @throws(classOf[XGBoostError])
   private def trainForNVDataset(
-      trainingData: NVDataset,
-      gdfColsIndices: Seq[Array[Int]],
+      sc: SparkContext,
+      dataMap: Map[String, GDFColumnData],
+      noEvalSet: Boolean,
       params: Map[String, Any],
-      hasGroup: Boolean,
-      evalSetsMap: Map[String, NVDataset],
       rabitEnv: java.util.Map[String, String],
       checkpointRound: Int,
       prevBooster: Booster): RDD[(Booster, Map[String, Array[Float]])] = {
-    require(!hasGroup, "Group is not supported yet for NVDataset")
-    // TODO To remove after "repartition" is ready
-    require(evalSetsMap.isEmpty, "Eval NvDataset now is not supported!")
     val updatedParams = parameterOverrideToUseGPU(params)
-    val (_, _, useExternalMemory, obj, eval, _, _, _, _, _) =
-      parameterFetchAndValidation(updatedParams, trainingData.sparkSession.sparkContext)
-
-    trainingData.mapColumnarSingleBatchPerPartition(columnBatch => {
-      val gdfColsHandles = gdfColsIndices.map(_.map(columnBatch.getColumn))
-      val watches = Watches.buildWatches(gdfColsHandles, getCacheDirName(useExternalMemory))
-      buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
-        obj, eval, prevBooster)
-    }).cache()
+    val (nWorkers, _, useExternalMemory, obj, eval, _, _, _, _, _) = parameterFetchAndValidation(
+      updatedParams, sc)
+    // Start training
+    if (noEvalSet) {
+      // Get the indices here at driver side to avoid passing the whole Map to executor(s)
+      val colIndicesForTrain = dataMap(trainName).colsIndices
+      dataMap(trainName).rawDataset.mapColumnarSingleBatchPerPartition {
+        columnBatch =>
+          val gdfColsHandles = colIndicesForTrain.map(_.map(columnBatch.getColumn))
+          val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), gdfColsHandles)
+          buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
+            obj, eval, prevBooster)
+      }.cache()
+    } else {
+      // Train with evaluation sets
+      coPartitionForNVDataset(dataMap, sc, nWorkers).mapPartitions {
+        nameAndColHandles =>
+          val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), nameAndColHandles)
+          buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
+            obj, eval, prevBooster)
+      }.cache()
+    }
   }
 
   /**
@@ -480,21 +541,17 @@ object XGBoost extends Serializable {
   private[spark] def trainDistributedForNVDataset(
       trainingData: NVDataset,
       params: Map[String, Any],
-      hasGroup: Boolean = false,
-      evalSetsMap: Map[String, NVDataset] = Map()):
-    (Booster, Map[String, Array[Float]]) = {
-    logger.info(s"NVDataset Running XGBoost ${spark.VERSION} with parameters:" +
+      evalSetsMap: Map[String, NVDataset] = Map(),
+      hasGroup: Boolean = false): (Booster, Map[String, Array[Float]]) = {
+    logger.info(s"NVDataset Running XGBoost ${spark.VERSION} with parameters: " +
       s"\n${params.mkString("\n")}")
-    // Check gdf columns first
-    val gdfColsIndices = checkAndGetGDFColumnIndices(trainingData.schema, params)
-    // Cache is not supported
-    val isCacheData = params.getOrElse("cacheTrainingSet", false).asInstanceOf[Boolean]
-    if (isCacheData) {
-      logger.warn("Data cache is not support for NVDataset!")
-    }
+    // First check and get parameters.
+    // Second check and get data for training with NVDataset
+    // Then setup checkpoint manager
     val sc = trainingData.sparkSession.sparkContext
     val (nWorkers, round, _, _, _, _, trackerConf, timeoutRequestWorkers,
-    checkpointPath, checkpointInterval) = parameterFetchAndValidation(params, sc)
+      checkpointPath, checkpointInterval) = parameterFetchAndValidation(params, sc)
+    val dataMap = prepareDataForNVDataset(trainingData, evalSetsMap, nWorkers, hasGroup, params)
     val checkpointManager = new CheckpointManager(sc, checkpointPath)
     checkpointManager.cleanUpHigherVersions(round.asInstanceOf[Int])
     var prevBooster = checkpointManager.loadCheckpointAsBooster
@@ -507,9 +564,8 @@ object XGBoost extends Serializable {
             val overriddenParams = overrideParamsAccordingToTaskCPUs(params, sc)
             val parallelismTracker = new SparkParallelismTracker(sc, timeoutRequestWorkers,
               nWorkers)
-            val boostersAndMetrics = trainForNVDataset(trainingData, gdfColsIndices,
-              overriddenParams, hasGroup, evalSetsMap, tracker.getWorkerEnvs,
-              checkpointRound, prevBooster)
+            val boostersAndMetrics = trainForNVDataset(sc, dataMap, evalSetsMap.isEmpty,
+              overriddenParams, tracker.getWorkerEnvs, checkpointRound, prevBooster)
             val sparkJobThread = new Thread() {
               override def run() {
                 // force the job
@@ -759,17 +815,32 @@ private object Watches {
     }
   }
 
-  def buildWatches(
-      gdfColHandles: Seq[Array[Long]],
-      cachedDirName: Option[String]): Watches = {
+  private def newDMatrixFromGdfColumns(gdfColHandles: Seq[Array[Long]]):
+      DMatrix = {
     // Suppose gdf columns are given in this order: features, label, weight,
-    // the same with that in 'getGDFColumnIndices'.
-    val trainMatrix = new DMatrix(gdfColHandles(0))
-    trainMatrix.setCUDFInfo("label", gdfColHandles(1))
+    // the same with that in 'checkAndGetGDFColumnIndices'.
+    val newDMatrix = new DMatrix(gdfColHandles(0))
+    newDMatrix.setCUDFInfo("label", gdfColHandles(1))
     if (gdfColHandles(2).nonEmpty) {
-      trainMatrix.setCUDFInfo("weight", gdfColHandles(2))
+      newDMatrix.setCUDFInfo("weight", gdfColHandles(2))
     }
+    newDMatrix
+  }
+
+  def buildWatches(cachedDirName: Option[String], gdfColHandles: Seq[Array[Long]]):
+      Watches = {
+    val trainMatrix = newDMatrixFromGdfColumns(gdfColHandles)
     new Watches(Array(trainMatrix), Array("train"), cachedDirName)
+  }
+
+  def buildWatches(
+      cachedDirName: Option[String],
+      nameAndGdfColumns: Iterator[(String, Seq[Array[Long]])]):
+      Watches = {
+    val dms = nameAndGdfColumns.map {
+      case (name, gdfColumns) => (name, newDMatrixFromGdfColumns(gdfColumns))
+    }.toArray
+    new Watches(dms.map(_._2), dms.map(_._1), cachedDirName)
   }
 
   def buildWatches(
