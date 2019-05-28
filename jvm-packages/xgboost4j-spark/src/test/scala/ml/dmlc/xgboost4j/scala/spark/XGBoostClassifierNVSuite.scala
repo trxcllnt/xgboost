@@ -25,47 +25,70 @@ import org.scalatest.FunSuite
 
 class XGBoostClassifierNVSuite extends FunSuite with PerTest {
 
-  private val NVClassifier = new XGBoostClassifier(Map(
-    "silent" -> 1,
-    "eta" -> 0.2f,
-    "max_depth" -> 2,
-    "objective" -> "multi:softprob",
-    "num_round" -> 50,
-    "num_workers" -> 1,
-    "timeout_request_workers" -> 60000L))
-
   override def afterEach(): Unit = {
     super.afterEach()
     NVDatasetData.classifierCleanUp()
   }
 
   test("test XGBoost-Spark XGBoostClassifier setFeaturesCols") {
-    val gdfCols = Seq("gdfCol1", "gdfCol2")
-    NVClassifier.setFeaturesCols(gdfCols)
-    assert(NVClassifier.getFeaturesCols.contains("gdfCol1"))
-    assert(NVClassifier.getFeaturesCols.contains("gdfCol2"))
-    assert(NVClassifier.getFeaturesCols.length == 2)
+    val nvClassifier = new XGBoostClassifier(Map("objective" -> "multi:softprob"))
+      .setFeaturesCols(Seq("gdfCol1", "gdfCol2"))
+    assert(nvClassifier.getFeaturesCols.contains("gdfCol1"))
+    assert(nvClassifier.getFeaturesCols.contains("gdfCol2"))
+    assert(nvClassifier.getFeaturesCols.length == 2)
   }
 
   test("test XGBoost-Spark XGBoostClassifier the overloaded 'fit' should work with NVDataset") {
+    val paramMap = Map(
+      "silent" -> 1,
+      "eta" -> 0.2f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_round" -> 30,
+      "num_workers" -> 1,
+      "timeout_request_workers" -> 60000L)
     val csvSchema = new StructType()
       .add("b", FloatType)
       .add("c", FloatType)
       .add("d", FloatType)
       .add("e", IntegerType)
     val trainDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
-    NVClassifier.setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
-                .setLabelCol("e")
+    val nvClassifier = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
+      .setLabelCol("e")
+
     // num_class is required for multiple classification
-    assertThrows[IllegalArgumentException](NVClassifier.fit(trainDataAsNVDS))
+    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
     // Invalid num_class
-    NVClassifier.setNumClass(-1)
-    assertThrows[IllegalArgumentException](NVClassifier.fit(trainDataAsNVDS))
-    NVClassifier.setNumClass(21)
-    val model = NVClassifier.fit(trainDataAsNVDS)
+    nvClassifier.setNumClass(-1)
+    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+    // Per the training data, num classes is 21
+    nvClassifier.setNumClass(21)
+
+    // Train without eval set(s)
+    val model = nvClassifier.fit(trainDataAsNVDS)
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
-    assert(0 < ret && ret < 5)
+    assert(0 < ret && ret < 20)
+
+    // Train with eval set(s)
+    val evalDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
+    // 1) Set via xgboost ML API
+    nvClassifier.setNvEvalSets(Map("test" -> evalDataAsNVDS))
+    val model2 = nvClassifier.fit(trainDataAsNVDS)
+    val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
+    // Allow big range since we don't care the accuracy
+    assert(0 < ret2 && ret2 < 20)
+    // 2) Set via param map
+    val model3 = new XGBoostClassifier(paramMap ++ Array(
+      "num_class" -> 21,
+      "eval_sets" -> Map("test" -> evalDataAsNVDS)))
+      .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
+      .setLabelCol("e")
+      .fit(trainDataAsNVDS)
+    val ret3 = model3.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
+    assert(0 < ret3 && ret3 < 20)
+    assert(ret2 === ret3)
   }
 
   test("NV Classifier XGBoost-Spark XGBoostClassifier output should match XGBoost4j") {
