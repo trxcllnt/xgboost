@@ -16,7 +16,7 @@
 
 package ml.dmlc.xgboost4j.scala.spark.nvidia
 
-import java.io.{ByteArrayOutputStream, IOException, ObjectInputStream, ObjectOutputStream}
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 import ai.rapids.cudf.{CSVOptions, DType, ParquetOptions, Table}
@@ -30,7 +30,7 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StructType, TimestampType}
-import org.apache.spark.TaskContext
+import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.unsafe.Platform
@@ -38,7 +38,6 @@ import org.apache.spark.unsafe.Platform
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
-import scala.util.control.NonFatal
 
 class NVDataset(fsRelation: HadoopFsRelation,
     sourceType: String,
@@ -58,7 +57,10 @@ class NVDataset(fsRelation: HadoopFsRelation,
   private[xgboost4j] def buildRDD: RDD[NVColumnBatch] = {
     val partitionReader = NVDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
       schema, sourceOptions)
-    new NVDatasetRDD(fsRelation.sparkSession, partitionReader, partitions, schema)
+    val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
+    val serializableConf = new SerializableWritable[Configuration](hadoopConf)
+    val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
+    new NVDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader, partitions, schema)
   }
 
   /**
@@ -259,19 +261,6 @@ class NVDataset(fsRelation: HadoopFsRelation,
 object NVDataset {
   private val logger = LogFactory.getLog(classOf[NVDataset])
 
-  private class SerializableConfiguration(@transient var value: Configuration)
-      extends Serializable {
-    private def writeObject(out: ObjectOutputStream): Unit = tryOrIOException {
-      out.defaultWriteObject()
-      value.write(out)
-    }
-
-    private def readObject(in: ObjectInputStream): Unit = tryOrIOException {
-      value = new Configuration(false)
-      value.readFields(in)
-    }
-  }
-
   private def getMapper[U: ClassTag](func: NVColumnBatch => Iterator[U]):
       Iterator[NVColumnBatch] => Iterator[U] = {
     batchIter: Iterator[NVColumnBatch] => {
@@ -336,7 +325,7 @@ object NVDataset {
         sparkSession: SparkSession,
         sourceType: String,
         schema: StructType,
-        options: Map[String, String]): PartitionedFile => Table = {
+        options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
     sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options)
       case "parquet" => getParquetPartFileReader(sparkSession, schema, options)
@@ -348,18 +337,13 @@ object NVDataset {
   private def getCsvPartFileReader(
       sparkSession: SparkSession,
       schema: StructType,
-      options: Map[String, String]): PartitionedFile => Table = {
+      options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
     buildCsvOptions(options)
 
-    val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
-    val broadcastHadoopConf = sparkSession.sparkContext.broadcast(
-      new SerializableConfiguration(hadoopConf))
-
-    partFile: PartitionedFile => {
-      val conf = broadcastHadoopConf.value.value
-      val partFileData = readPartFileFully(partFile, conf)
+    (conf: Configuration, partFile: PartitionedFile) => {
+      val partFileData = readPartFileFully(conf, partFile)
       val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
       schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
       val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options), partFileData)
@@ -376,17 +360,13 @@ object NVDataset {
   private def getParquetPartFileReader(
       sparkSession: SparkSession,
       schema: StructType,
-      options: Map[String, String]): PartitionedFile => Table = {
+      options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
     // Try to build Parquet options on the driver here to validate and fail fast.
     // The other Parquet option build below will occur on the executors.
     buildParquetOptions(options, schema)
 
-    val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
-    val broadcastHadoopConf = sparkSession.sparkContext.broadcast(
-      new SerializableConfiguration(hadoopConf))
-    partFile: PartitionedFile => {
-      val conf = broadcastHadoopConf.value.value
-      val partFileData = readPartFileFully(partFile, conf)
+    (conf: Configuration, partFile: PartitionedFile) => {
+      val partFileData = readPartFileFully(conf, partFile)
       val parquetOptions = buildParquetOptions(options, schema)
       val table = Table.readParquet(parquetOptions, partFileData)
       val numColumns = table.getNumberOfColumns
@@ -421,11 +401,10 @@ object NVDataset {
     builder.build
   }
 
-  private def readPartFileFully(partFile: PartitionedFile,
-      hadoopConf: Configuration): Array[Byte] = {
-    val lfs = FileSystem.getLocal(hadoopConf)
-    val path = lfs.makeQualified(new Path(partFile.filePath))
-    val fs = path.getFileSystem(hadoopConf)
+  private def readPartFileFully(conf: Configuration, partFile: PartitionedFile): Array[Byte] = {
+    val rawPath = new Path(partFile.filePath)
+    val fs = rawPath.getFileSystem(conf)
+    val path = fs.makeQualified(rawPath)
     val fileSize = fs.getFileStatus(path).getLen
     if (fileSize > Integer.MAX_VALUE) {
       throw new UnsupportedOperationException(s"File partition at $path is" +
@@ -459,25 +438,6 @@ object NVDataset {
       case TimestampType => DType.TIMESTAMP
       case unknownType => throw new UnsupportedOperationException(
         s"Unsupported Spark SQL type $unknownType")
-    }
-  }
-
-  /**
-    * Execute a block of code that returns a value, re-throwing any non-fatal uncaught
-    * exceptions as IOException. This is used when implementing Externalizable and Serializable's
-    * read and write methods, since Java's serializer will not report non-IOExceptions properly;
-    * see SPARK-4080 for more context.
-    */
-  private def tryOrIOException[T](block: => T): T = {
-    try {
-      block
-    } catch {
-      case e: IOException =>
-        logger.error("Exception encountered", e)
-        throw e
-      case NonFatal(e) =>
-        logger.error("Exception encountered", e)
-        throw new IOException(e)
     }
   }
 

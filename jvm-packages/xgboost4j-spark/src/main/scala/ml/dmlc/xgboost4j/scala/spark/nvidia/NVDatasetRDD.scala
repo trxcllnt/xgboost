@@ -21,8 +21,10 @@ import java.util.NoSuchElementException
 
 import ai.rapids.cudf.Table
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
+import org.apache.hadoop.conf.Configuration
 import org.apache.parquet.io.ParquetDecodingException
-import org.apache.spark.{Partition, TaskContext}
+import org.apache.spark.{Partition, SerializableWritable, TaskContext}
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile, SchemaColumnConvertNotSupportedException}
@@ -31,15 +33,17 @@ import org.apache.spark.sql.types.StructType
 
 private[spark] class NVDatasetRDD(
     @transient private val sparkSession: SparkSession,
-    readFunction: PartitionedFile => Table with AutoCloseable,
+    broadcastedConf: Broadcast[SerializableWritable[Configuration]],
+    readFunction: (Configuration, PartitionedFile) => Table with AutoCloseable,
     @transient val filePartitions: Seq[FilePartition],
     schema: StructType)
   extends RDD[NVColumnBatch](sparkSession.sparkContext, Nil) {
 
   // The resulting iterator will only return a single NVColumnBatch.
   override def compute(split: Partition, context: TaskContext): Iterator[NVColumnBatch] = {
+    val conf: Configuration = broadcastedConf.value.value
     val iterator = new Iterator[NVColumnBatch] with AutoCloseable {
-      private[this] var batchedTable = NVDatasetRDD.buildBatch(readFunction,
+      private[this] var batchedTable = NVDatasetRDD.buildBatch(conf, readFunction,
           split.asInstanceOf[FilePartition].files)
       private[this] var resultBatch: Option[NVColumnBatch] =
           batchedTable.map({ new NVColumnBatch(_, schema) })
@@ -83,7 +87,7 @@ private[spark] class NVDatasetRDD(
 
 private[spark] object NVDatasetRDD {
 
-  private def buildBatch(readFunc: PartitionedFile => Table,
+  private def buildBatch(conf: Configuration, readFunc: (Configuration, PartitionedFile) => Table,
       partfiles: Seq[PartitionedFile]): Option[Table] = {
     var result: Option[Table] = None
     if (partfiles.isEmpty) {
@@ -94,7 +98,7 @@ private[spark] object NVDatasetRDD {
     val haveMultipleTables = tables.length > 1
     try {
       for ((partfile, i) <- partfiles.zipWithIndex) {
-        tables(i) = readPartFile(readFunc, partfile)
+        tables(i) = readPartFile(conf, readFunc, partfile)
       }
       result = Some(if (haveMultipleTables) Table.concatenate(tables: _*) else tables(0))
     } finally {
@@ -108,9 +112,12 @@ private[spark] object NVDatasetRDD {
     result
   }
 
-  private def readPartFile(readFunc: PartitionedFile => Table, partfile: PartitionedFile): Table = {
+  private def readPartFile(
+      conf: Configuration,
+      readFunc: (Configuration, PartitionedFile) => Table,
+      partfile: PartitionedFile): Table = {
     try {
-      readFunc(partfile)
+      readFunc(conf, partfile)
     } catch {
       case e: FileNotFoundException =>
         throw new FileNotFoundException(
