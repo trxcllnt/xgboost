@@ -222,35 +222,20 @@ class XGBoostClassifier (
       case nomAttr: NominalAttribute => nomAttr.getNumValues
       case _: NumericAttribute | UnresolvedAttribute => None
     }
-    classNum orElse {
-      val innerClassNum = if (setupDefaultEvalMetric == "error") 2 else 3
-      val paramClassNum = if (isDefined(numClass)) {
-        require((innerClassNum == 2 && $(numClass) == 1) ||
-          (innerClassNum == 3 && $(numClass) >= 3),
-          "Invalid param 'num_class', suppose to be '1' for binary classification" +
-            " and value (> 2) for multiple classification!")
-        // The returned value is used by model, should be 2 for binary classification
-        Some(if (innerClassNum == 3) $(numClass) else innerClassNum)
-      } else {
-        if (innerClassNum != 2) {
-          // Attempt to automatically detect the number of classes from the label data.
-          val numClasses = dataset.findNumClasses($(labelCol))
-          require(numClasses <= maxNumClass, s"Classifier inferred $numClasses from label values" +
-            s" in column $labelCol, but this exceeded the max numClasses ($maxNumClass) allowed" +
-            s" to be inferred from values.  To avoid this error for labels with > $maxNumClass" +
-            s" classes, specify numClasses explicitly in the metadata; this can be done by" +
-            s" applying StringIndexer to the label column.")
-          logInfo(this.getClass.getCanonicalName + s" inferred $numClasses classes for" +
-            s" labelCol=$labelCol since numClasses was not specified in the column metadata.")
-          Some(numClasses)
-        } else {
-          require(innerClassNum == 2,
-            "Param 'num_class' should be set for multiple classification!")
-          None
-        }
-      }
-      paramClassNum orElse Some(innerClassNum)
-    } get
+    classNum match {
+      case Some(n: Int) => n
+      case None =>
+        // Attempt to automatically detect the number of classes from the label data.
+        val numClasses = dataset.findNumClasses($(labelCol))
+        require(numClasses <= maxNumClass, s"Classifier inferred $numClasses from label values" +
+          s" in column $labelCol, but this exceeded the max numClasses ($maxNumClass) allowed" +
+          s" to be inferred from values.  To avoid this error for labels with > $maxNumClass" +
+          s" classes, specify numClasses explicitly in the metadata; this can be done by applying" +
+          s" StringIndexer to the label column.")
+        logInfo(this.getClass.getCanonicalName + s" inferred $numClasses classes for" +
+          s" labelCol=$labelCol since numClasses was not specified in the column metadata.")
+        numClasses
+    }
   }
 
   def fit(dataset: NVDataset): XGBoostClassificationModel = {
