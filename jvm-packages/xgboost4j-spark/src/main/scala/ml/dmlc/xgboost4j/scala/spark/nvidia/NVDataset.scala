@@ -343,7 +343,7 @@ object NVDataset {
     buildCsvOptions(options)
 
     (conf: Configuration, partFile: PartitionedFile) => {
-      val partFileData = readPartFileFully(partFile, conf)
+      val partFileData = readPartFileFully(conf, partFile)
       val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
       schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
       val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options), partFileData)
@@ -366,7 +366,7 @@ object NVDataset {
     buildParquetOptions(options, schema)
 
     (conf: Configuration, partFile: PartitionedFile) => {
-      val partFileData = readPartFileFully(partFile, conf)
+      val partFileData = readPartFileFully(conf, partFile)
       val parquetOptions = buildParquetOptions(options, schema)
       val table = Table.readParquet(parquetOptions, partFileData)
       val numColumns = table.getNumberOfColumns
@@ -401,11 +401,10 @@ object NVDataset {
     builder.build
   }
 
-  private def readPartFileFully(partFile: PartitionedFile,
-      hadoopConf: Configuration): Array[Byte] = {
-    val lfs = FileSystem.getLocal(hadoopConf)
-    val path = lfs.makeQualified(new Path(partFile.filePath))
-    val fs = path.getFileSystem(hadoopConf)
+  private def readPartFileFully(conf: Configuration, partFile: PartitionedFile): Array[Byte] = {
+    val rawPath = new Path(partFile.filePath)
+    val fs = rawPath.getFileSystem(conf)
+    val path = fs.makeQualified(rawPath)
     val fileSize = fs.getFileStatus(path).getLen
     if (fileSize > Integer.MAX_VALUE) {
       throw new UnsupportedOperationException(s"File partition at $path is" +
