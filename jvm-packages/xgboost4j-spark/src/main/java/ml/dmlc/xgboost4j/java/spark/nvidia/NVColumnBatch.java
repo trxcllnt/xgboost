@@ -42,6 +42,10 @@ public class NVColumnBatch {
     return table.getNumberOfColumns();
   }
 
+  public ColumnVector getColumnVector(int index) {
+    return table.getColumn(index);
+  }
+
   public long getColumn(int index) {
     ColumnVector v = table.getColumn(index);
     return v.getNativeCudfColumnAddress();

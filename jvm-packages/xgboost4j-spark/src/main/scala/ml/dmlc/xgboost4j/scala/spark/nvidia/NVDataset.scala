@@ -113,6 +113,20 @@ class NVDataset(fsRelation: HadoopFsRelation,
     new NVDataset(fsRelation, sourceType, sourceOptions, Some(newPartitions))
   }
 
+  /**
+    * Find the number of classes for the specified label column. The largest value within
+    * the column is assumed to be one less than the number of classes.
+    */
+  def findNumClasses(labelCol: String): Int = {
+    val fieldIndex = schema.fieldIndex(labelCol)
+    val rdd = mapColumnarSingleBatchPerPartition(NVDataset.maxDoubleMapper(fieldIndex))
+    val maxVal = rdd.reduce(Math.max)
+    val numClasses = maxVal + 1
+    require(numClasses.isValidInt, s"Found max label value =" +
+        s" $maxVal but requires integers in range [0, ... ${Int.MaxValue})")
+    numClasses.toInt
+  }
+
   /** The SparkSession that created this NVDataset. */
   def sparkSession: SparkSession = fsRelation.sparkSession
 
@@ -275,6 +289,17 @@ object NVDataset {
       }
     }
   }
+
+  private def maxDoubleMapper(columnIndex: Int): NVColumnBatch => Iterator[Double] =
+    (b: NVColumnBatch) => {
+      val column = b.getColumnVector(columnIndex)
+      val scalar = column.max()
+      if (scalar.isValid) {
+        Iterator.single(scalar.getDouble)
+      } else {
+        Iterator.empty
+      }
+    }
 
   private def columnBatchToRows(batch: NVColumnBatch): Iterator[Row] = {
     val taskContext = TaskContext.get

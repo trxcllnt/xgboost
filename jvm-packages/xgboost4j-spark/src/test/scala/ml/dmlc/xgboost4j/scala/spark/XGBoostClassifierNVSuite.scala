@@ -62,6 +62,10 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     // Invalid num_class
     nvClassifier.setNumClass(-1)
     assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+    // num_class can be verified by automatic detection
+    nvClassifier.setNumClass(50)
+    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+
     // Per the training data, num classes is 21
     nvClassifier.setNumClass(21)
 
