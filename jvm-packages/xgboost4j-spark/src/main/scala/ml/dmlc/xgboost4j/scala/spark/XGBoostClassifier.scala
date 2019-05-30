@@ -248,7 +248,8 @@ class XGBoostClassifier (
     val _numClasses = getNumberClasses(dataset)
     this.logInfo(s"Got 'numClass'=${_numClasses} for NVDataset")
     if (isDefined(numClass)) {
-      require((_numClasses == 2 && $(numClass) == 1) || (_numClasses == $(numClass)),
+      require((_numClasses == 2 && $(numClass) == 1) ||
+        (_numClasses != 2 && _numClasses == $(numClass)),
         "Invalid param 'num_class', suppose to be '1' for binary classification" +
           " and value (> 2) for multiple classification!")
     } else {
