@@ -8,11 +8,13 @@
 #include <thrust/system/cuda/error.h>
 #include <thrust/system_error.h>
 #include <xgboost/logging.h>
+#include <rabit/rabit.h>
 
 #include "common.h"
 #include "span.h"
 
 #include <algorithm>
+#include <omp.h>
 #include <chrono>
 #include <ctime>
 #include <cub/cub.cuh>
@@ -25,10 +27,6 @@
 #ifdef XGBOOST_USE_NCCL
 #include "nccl.h"
 #include "../common/io.h"
-#endif
-
-#if __CUDACC_VER_MAJOR__ == 10 && __CUDACC_VER_MINOR__ == 1
-#error "CUDA 10.1 is not supported, see #4264."
 #endif
 
 namespace dh {
@@ -781,6 +779,29 @@ void Gather(int device_idx, T *out, const T *in, const int *instId, int nVals) {
                                        });
 }
 
+class SaveCudaContext {
+ private:
+  int saved_device_;
+
+ public:
+  template <typename Functor>
+  explicit SaveCudaContext (Functor func) : saved_device_{-1} {
+    // When compiled with CUDA but running on CPU only device,
+    // cudaGetDevice will fail.
+    try {
+      safe_cuda(cudaGetDevice(&saved_device_));
+    } catch (const dmlc::Error &except) {
+      saved_device_ = -1;
+    }
+    func();
+  }
+  ~SaveCudaContext() {
+    if (saved_device_ != -1) {
+      safe_cuda(cudaSetDevice(saved_device_));
+    }
+  }
+};
+
 /**
  * \class AllReducer
  *
@@ -793,6 +814,7 @@ class AllReducer {
   bool initialised_;
   size_t allreduce_bytes_;  // Keep statistics of the number of bytes communicated
   size_t allreduce_calls_;  // Keep statistics of the number of reduce calls
+  std::vector<size_t> host_data;  // Used for all reduce on host
 #ifdef XGBOOST_USE_NCCL
   std::vector<ncclComm_t> comms;
   std::vector<cudaStream_t> streams;
@@ -806,8 +828,18 @@ class AllReducer {
                  allreduce_calls_(0) {}
 
   /**
-   * \fn  void Init(const std::vector<int> &device_ordinals)
-   *
+   * \brief If we are using a single GPU only
+   */
+  bool IsSingleGPU() {
+#ifdef XGBOOST_USE_NCCL
+    CHECK(device_counts.size() > 0) << "AllReducer not initialised.";
+    return device_counts.size() <= 1 && device_counts.at(0) == 1;
+#else
+    return true;
+#endif
+  }
+
+  /**
    * \brief Initialise with the desired device ordinals for this communication
    * group.
    *
@@ -985,6 +1017,22 @@ class AllReducer {
 #endif
   };
 
+  /**
+   * \brief Synchronizes the device 
+   *
+   * \param device_id Identifier for the device.
+   */
+  void Synchronize(int device_id) {
+#ifdef XGBOOST_USE_NCCL
+    SaveCudaContext([&]() {
+      dh::safe_cuda(cudaSetDevice(device_id));
+      int idx = std::find(device_ordinals.begin(), device_ordinals.end(), device_id) - device_ordinals.begin();
+      CHECK(idx < device_ordinals.size());
+      dh::safe_cuda(cudaStreamSynchronize(streams[idx]));
+    });
+#endif
+  };
+
 #ifdef XGBOOST_USE_NCCL
   /**
    * \fn  ncclUniqueId GetUniqueId()
@@ -1007,27 +1055,40 @@ class AllReducer {
     return id;
   }
 #endif
-};
-
-class SaveCudaContext {
- private:
-  int saved_device_;
-
- public:
-  template <typename Functor>
-  explicit SaveCudaContext (Functor func) : saved_device_{-1} {
-    // When compiled with CUDA but running on CPU only device,
-    // cudaGetDevice will fail.
-    try {
-      safe_cuda(cudaGetDevice(&saved_device_));
-    } catch (const dmlc::Error &except) {
-      saved_device_ = -1;
+  /** \brief Perform max all reduce operation on the host. This function first
+   * reduces over omp threads then over nodes using rabit (which is not thread
+   * safe) using the master thread. Uses naive reduce algorithm for local
+   * threads, don't expect this to scale.*/
+  void HostMaxAllReduce(std::vector<size_t> *p_data) {
+    auto &data = *p_data;
+    // Wait in case some other thread is accessing host_data
+#pragma omp barrier
+    // Reset shared buffer
+#pragma omp single
+    {
+      host_data.resize(data.size());
+      std::fill(host_data.begin(), host_data.end(), size_t(0));
     }
-    func();
-  }
-  ~SaveCudaContext() {
-    if (saved_device_ != -1) {
-      safe_cuda(cudaSetDevice(saved_device_));
+    // Threads update shared array
+    for (auto i = 0ull; i < data.size(); i++) {
+#pragma omp critical
+      { host_data[i] = std::max(host_data[i], data[i]); }
+    }
+    // Wait until all threads are finished
+#pragma omp barrier
+
+    // One thread performs all reduce across distributed nodes
+#pragma omp master
+    {
+      rabit::Allreduce<rabit::op::Max, size_t>(host_data.data(),
+                                               host_data.size());
+    }
+
+#pragma omp barrier
+
+    // Threads can now read back all reduced values
+    for (auto i = 0ull; i < data.size(); i++) {
+      data[i] = host_data[i];
     }
   }
 };
@@ -1046,11 +1107,15 @@ class SaveCudaContext {
 template <typename T, typename FunctionT>
 void ExecuteIndexShards(std::vector<T> *shards, FunctionT f) {
   SaveCudaContext{[&]() {
+    // Temporarily turn off dynamic so we have a guaranteed number of threads
+    bool dynamic = omp_get_dynamic();
+    omp_set_dynamic(false);
     const long shards_size = static_cast<long>(shards->size());
-#pragma omp parallel for schedule(static, 1) if (shards_size > 1)
+#pragma omp parallel for schedule(static, 1) if (shards_size > 1) num_threads(shards_size)
     for (long shard = 0; shard < shards_size; ++shard) {
       f(shard, shards->at(shard));
     }
+    omp_set_dynamic(dynamic);
   }};
 }
 

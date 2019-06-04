@@ -8,6 +8,7 @@
 #define XGBOOST_COMMON_HIST_UTIL_H_
 
 #include <xgboost/data.h>
+#include <xgboost/generic_parameters.h>
 #include <limits>
 #include <vector>
 #include "row_set.h"
@@ -18,6 +19,71 @@
 
 namespace xgboost {
 namespace common {
+
+/*
+ * \brief A thin wrapper around dynamically allocated C-style array.
+ * Make sure to call resize() before use.
+ */
+template<typename T>
+struct SimpleArray {
+  ~SimpleArray() {
+    free(ptr_);
+    ptr_ = nullptr;
+  }
+
+  void resize(size_t n) {
+    T* ptr = static_cast<T*>(malloc(n*sizeof(T)));
+    memcpy(ptr, ptr_, n_ * sizeof(T));
+    free(ptr_);
+    ptr_ = ptr;
+    n_ = n;
+  }
+
+  T& operator[](size_t idx) {
+    return ptr_[idx];
+  }
+
+  T& operator[](size_t idx) const {
+    return ptr_[idx];
+  }
+
+  size_t size() const {
+    return n_;
+  }
+
+  T back() const {
+    return ptr_[n_-1];
+  }
+
+  T* data() {
+    return ptr_;
+  }
+
+  const T* data() const {
+    return ptr_;
+  }
+
+
+  T* begin() {
+    return ptr_;
+  }
+
+  const T* begin() const {
+    return ptr_;
+  }
+
+  T* end() {
+    return ptr_ + n_;
+  }
+
+  const T* end() const {
+    return ptr_ + n_;
+  }
+
+ private:
+  T* ptr_ = nullptr;
+  size_t n_ = 0;
+};
 
 /*! \brief Cut configuration for all the features. */
 struct HistCutMatrix {
@@ -47,10 +113,13 @@ struct HistCutMatrix {
   Monitor monitor_;
 };
 
-/*! \brief Builds the cut matrix on the GPU */
-void DeviceSketch
-  (const SparsePage& batch, const MetaInfo& info,
-   const tree::TrainParam& param, HistCutMatrix* hmat, int gpu_batch_nrows);
+/*! \brief Builds the cut matrix on the GPU.
+ *  
+ *  \return The row stride across the entire dataset.
+ */
+size_t DeviceSketch
+  (const tree::TrainParam& param, const LearnerTrainParam &learner_param, int gpu_batch_nrows,
+   DMatrix* dmat, HistCutMatrix* hmat);
 
 /*!
  * \brief A single row in global histogram index.
