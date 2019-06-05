@@ -297,7 +297,7 @@ class XGBoostRegressionModel private[ml] (
         s"Expect [${featuresColNames.mkString(", ")}], " +
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
-    val predictionRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
+    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
       val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
 
       val gdfColsHandles = indices.map(_.map(nvColumnBatch.getColumn))
@@ -305,24 +305,15 @@ class XGBoostRegressionModel private[ml] (
 
       Rabit.init(rabitEnv.asJava)
       try {
-        val Array(originalPredictionItr, predLeafItr, predContribItr) =
+        val Array(rawPredictionItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
-        Iterator(originalPredictionItr, predLeafItr, predContribItr)
+        produceResultIterator(NVDataset.columnBatchToRows(nvColumnBatch),
+          rawPredictionItr, predLeafItr, predContribItr)
       } finally {
         Rabit.shutdown()
         dm.delete()
       }
     })
-
-    val resultRDD = dataset.zipPartitionsAsRows(predictionRDD, preservesPartitioning = true) {
-      case (inputIterator, predictionItr) =>
-        if (inputIterator.hasNext) {
-          produceResultIterator(inputIterator, predictionItr.next(), predictionItr.next(),
-            predictionItr.next())
-        } else {
-          Iterator()
-        }
-    }
 
     bBooster.unpersist(blocking = false)
     dataset.sparkSession.createDataFrame(resultRDD, generateResultSchema(schema))
