@@ -19,7 +19,7 @@ package ml.dmlc.xgboost4j.scala.spark.nvidia
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.scala.spark.PerTest
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
@@ -139,25 +139,17 @@ class NVDatasetSuite extends FunSuite with PerTest {
     assertResult(149) { counts(0)._2 }
   }
 
-  test("zipPartitionsAsRows") {
+  test("buildRDD") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new NVDataReader(ss)
     val dataPath = getTestDataPath("/rank.train.csv")
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(dataPath)
-    val rddOther = ss.sparkContext.parallelize(1 to 1000, 1)
-    val zipFunc = (rowIter: Iterator[Row], numIter: Iterator[Int]) => new Iterator[(Int, Row)] {
-      override def hasNext: Boolean = rowIter.hasNext
-
-      override def next(): (Int, Row) = (numIter.next, rowIter.next)
-    }
-
-    val rddZipped = dataset.zipPartitionsAsRows(rddOther, true)(zipFunc)
-    val data = rddZipped.collect
+    val rdd = dataset.buildRDD.mapPartitions(_.flatMap(NVDataset.columnBatchToRows))
+    val data = rdd.collect
 
     assertResult(149) { data.length }
-    assertResult(1) { data(0)._1 }
-    val firstRow = data(0)._2
+    val firstRow = data.head
     assertResult(5) { firstRow.size }
     assertResult(false) { firstRow.getBoolean(0) }
     implicit val doubleEquality = TolerantNumerics.tolerantDoubleEquality(0.000000001)
@@ -166,8 +158,7 @@ class NVDatasetSuite extends FunSuite with PerTest {
     assert(firstRow.getDouble(3) === 0.621236086198)
     assertResult(1) { firstRow.get(4) }
 
-    assertResult(149) { data(148)._1 }
-    val lastRow = data(148)._2
+    val lastRow = data.last
     assertResult(5) { lastRow.size }
     assertResult(false) { firstRow.getBoolean(0) }
     assert(lastRow.getDouble(1) === 9.90744703306)
