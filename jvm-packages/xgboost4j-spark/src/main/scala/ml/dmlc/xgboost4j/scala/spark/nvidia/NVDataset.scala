@@ -301,7 +301,7 @@ object NVDataset {
       }
     }
 
-  private def columnBatchToRows(batch: NVColumnBatch): Iterator[Row] = {
+  private[xgboost4j] def columnBatchToRows(batch: NVColumnBatch): Iterator[Row] = {
     val taskContext = TaskContext.get
     val iter = new Iterator[Row] with AutoCloseable {
       private val numRows = batch.getNumRows
