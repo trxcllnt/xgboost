@@ -24,7 +24,7 @@ import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{BlockLocation, FileStatus, FileSystem, LocatedFileStatus, Path}
+import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -70,19 +70,6 @@ class NVDataset(fsRelation: HadoopFsRelation,
   private[xgboost4j] def mapColumnarSingleBatchPerPartition[U: ClassTag](
       func: NVColumnBatch => Iterator[U]): RDD[U] = {
     buildRDD.mapPartitions(NVDataset.getMapper(func))
-  }
-
-  /**
-    * Zip the data partitions with another RDD and return a new RDD by
-    * applying a function to the zipped partitions. Assumes that this data and the RDD have the
-    * *same number of partitions*, but does *not* require them to have the same number
-    * of elements in each partition.
-    */
-  private[xgboost4j] def zipPartitionsAsRows[B: ClassTag, V: ClassTag]
-      (other: RDD[B], preservesPartitioning: Boolean)
-      (f: (Iterator[Row], Iterator[B]) => Iterator[V]): RDD[V] = {
-    val rdd = mapColumnarSingleBatchPerPartition(NVDataset.columnBatchToRows)
-    rdd.zipPartitions(other, preservesPartitioning)(f)
   }
 
   /** Return a new NVDataset that has exactly numPartitions partitions. */
