@@ -82,6 +82,7 @@ static unsigned int get_unsaferow_nullset_size(unsigned int num_columns) {
 /*! \brief Returns the byte width of the specified gdf_dtype or 0 on error. */
 static size_t get_dtype_size(gdf_dtype dtype) {
   switch (dtype) {
+  case GDF_BOOL8:
   case GDF_INT8:
     return 1;
   case GDF_INT16:
@@ -156,7 +157,7 @@ void* build_unsafe_rows(std::vector<gdf_column const*> const& gdfcols) {
     uint8_t* dest_addr = unsafe_rows_dptr + nullset_size + i * 8;
     unsigned int dtype_size = get_dtype_size(gdfcols[i]->dtype);
     if (dtype_size == 0) {
-      throw std::runtime_error("Unsuppported column type");
+      throw std::runtime_error("Unsupported column type");
     }
 
     cuda_status = xgboost::spark::store_with_stride_async(dest_addr,
@@ -196,7 +197,7 @@ static void throw_java_exception(JNIEnv* env, char const* classname,
 }
 
 static void throw_java_exception(JNIEnv* env, char const* msg) {
-  throw_java_exception(env, "java/lang/RuntimeException");
+  throw_java_exception(env, "java/lang/RuntimeException", msg);
 }
 
 JNIEXPORT jlong JNICALL
