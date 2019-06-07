@@ -48,6 +48,19 @@ class NVDatasetSuite extends FunSuite with PerTest {
     assertResult(149) { counts(0)._2 }
   }
 
+  test("CSV parsing with compression") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new NVDataReader(ss)
+    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/rank.train.csv.gz"))
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+      Iterator.single(b.getNumColumns, b.getNumRows))
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
+  }
+
   test("Unknown CSV parsing option") {
     val reader = new NVDataReader(ss)
     assertThrows[UnsupportedOperationException] {

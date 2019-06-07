@@ -25,6 +25,7 @@ import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
+import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -425,7 +426,10 @@ object NVDataset {
 
     val baos = new ByteArrayOutputStream(fileSize.toInt)
     val buffer = new Array[Byte](1024 * 16)
-    val in = fs.open(path)
+    val codecFactory = new CompressionCodecFactory(conf)
+    val codec = codecFactory.getCodec(path)
+    val rawInput = fs.open(path)
+    val in = if (codec != null) codec.createInputStream(rawInput) else rawInput
     try {
       var numBytes = in.read(buffer)
       while (numBytes >= 0) {
