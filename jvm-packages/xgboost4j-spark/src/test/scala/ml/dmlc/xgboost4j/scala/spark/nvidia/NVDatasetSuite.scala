@@ -155,9 +155,8 @@ class NVDatasetSuite extends FunSuite with PerTest {
   test("buildRDD") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new NVDataReader(ss)
-    val dataPath = getTestDataPath("/rank.train.csv")
-    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
-    val dataset = reader.schema(csvSchema).csv(dataPath)
+    val dataPath = getTestDataPath("/rank.train.parquet")
+    val dataset = reader.parquet(dataPath)
     val rdd = dataset.buildRDD.mapPartitions(_.flatMap(NVDataset.columnBatchToRows))
     val data = rdd.collect
 
