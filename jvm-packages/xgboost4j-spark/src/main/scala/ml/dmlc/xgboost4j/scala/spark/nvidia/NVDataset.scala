@@ -298,7 +298,7 @@ object NVDataset {
       private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(schema.length) + schema.length * 8
       private var buffer: Long = _
       private var nextRow = 0
-      private val row = new UnsafeRow(batch.getNumColumns)
+      private val row = new UnsafeRow(schema.length)
 
       override def hasNext: Boolean = nextRow < numRows
 
@@ -383,10 +383,12 @@ object NVDataset {
       val parquetOptions = buildParquetOptions(options, schema)
       val table = Table.readParquet(parquetOptions, partFileData)
       val numColumns = table.getNumberOfColumns
-      if (schema.length != numColumns) {
+      // The parquet loader can load more columns than requested as it will
+      // always load a pandas index column if one is found.
+      if (schema.length > numColumns) {
         table.close()
         throw new QueryExecutionException(s"Expected ${schema.length} columns " +
-            s"but only read ${table.getNumberOfColumns} from $partFile")
+            s"but only read ${numColumns} from $partFile")
       }
       table
     }
