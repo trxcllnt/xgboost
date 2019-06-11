@@ -1,0 +1,50 @@
+ARG CUDA_VERSION
+FROM nvidia/cuda:$CUDA_VERSION-devel-ubuntu18.04
+
+# install utils
+RUN apt-get update && \
+	apt-get install -y tar build-essential axel apt-utils
+
+RUN apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub
+RUN axel https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/nvidia-machine-learning-repo-ubuntu1804_1.0.0-1_amd64.deb
+RUN dpkg -i nvidia-machine-learning-repo-ubuntu1804_1.0.0-1_amd64.deb
+RUN apt-get update && apt-get install -y --allow-change-held-packages libnccl2 libnccl-dev
+
+RUN axel https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+
+RUN bash Miniconda3-latest-Linux-x86_64.sh -b -p /usr/local/miniconda3
+
+RUN /usr/local/miniconda3/bin/conda init
+
+ENV PATH="/usr/local/miniconda3/bin:${PATH}"
+
+RUN conda install -y cmake
+RUN conda install -y maven
+RUN conda install -y numba
+RUN conda install -y openjdk
+
+RUN axel https://archive.apache.org/dist/spark/spark-2.4.0/spark-2.4.0-bin-hadoop2.7.tgz
+RUN tar zxf spark-2.4.0-bin-hadoop2.7.tgz -C /usr/local
+RUN ln -s /usr/local/spark-2.4.0-bin-hadoop2.7 /usr/local/spark
+
+RUN echo 'export SPARK_HOME=/usr/local/spark' >> ~/.bashrc
+RUN echo 'export PATH="/usr/local/spark/sbin:/usr/local/spark/bin:$PATH"' >> ~/.bashrc
+
+RUN conda install -y -c nvidia/label/cuda10.0 -c rapidsai/label/cuda10.0 -c numba \
+    -c conda-forge -c defaults cudf=0.7 python=3.7
+
+
+#ENV GOSU_VERSION 1.10
+
+# Install lightweight sudo (not bound to TTY)
+#RUN set -ex; \
+#    axel -o /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-amd64" && \
+#    chmod +x /usr/local/bin/gosu && \
+#    gosu nobody true
+
+# Default entry-point to use if running locally
+# It will preserve attributes of created files
+#COPY entrypoint.sh /scripts/
+
+WORKDIR /workspace
+#ENTRYPOINT ["/scripts/entrypoint.sh"]

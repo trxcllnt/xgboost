@@ -46,6 +46,17 @@
             <name>central maven</name>
             <url>https://repo1.maven.org/maven2</url>
         </repository>
+        <repository>
+            <id>apt_sh04_maven</id>
+            <name>Gary's maven</name>
+            <url>http://apt-sh04:8081/repository/maven-public/</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+       </repository>
     </repositories>
     <modules>
         <module>xgboost4j</module>
