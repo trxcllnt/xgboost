@@ -4,9 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>ml.dmlc</groupId>
+    <groupId>ai.rapids</groupId>
     <artifactId>xgboost-jvm</artifactId>
-    <version>0.90</version>
+    <version>0.90-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>XGBoost JVM Package</name>
     <description>JVM Package for XGBoost</description>
@@ -29,6 +29,7 @@
         <url>https://github.com/dmlc/xgboost</url>
     </scm>
     <properties>
+        <self.version>0.90-SNAPSHOT</self.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.source>1.7</maven.compiler.source>
@@ -47,16 +48,10 @@
             <url>https://repo1.maven.org/maven2</url>
         </repository>
         <repository>
-            <id>apt_sh04_maven</id>
-            <name>Gary's maven</name>
-            <url>http://apt-sh04:8081/repository/maven-public/</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-       </repository>
+            <id>spark.sw.nvidia.com</id>
+            <name>sw-spark-maven</name>
+            <url>https://gpuwa.nvidia.com/artifactory/sw-spark-maven</url>
+        </repository>
     </repositories>
     <modules>
         <module>xgboost4j</module>
@@ -219,10 +214,11 @@
         </profile>
     </profiles>
     <distributionManagement>
-        <snapshotRepository>
-            <id>ossrh</id>
-            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
-        </snapshotRepository>
+        <repository>
+            <id>spark.sw.nvidia.com</id>
+            <name>sw-spark-maven</name>
+            <url>https://gpuwa.nvidia.com/artifactory/sw-spark-maven-local</url>
+        </repository>
     </distributionManagement>
     <build>
         <resources>

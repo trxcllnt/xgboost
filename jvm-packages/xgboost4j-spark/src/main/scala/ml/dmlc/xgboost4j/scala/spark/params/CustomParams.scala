@@ -84,3 +84,19 @@ class TrackerConfParam(
     parsedValue.extract[TrackerConf]
   }
 }
+
+class SeqStringParam(
+    parent: Params,
+    name: String,
+    doc: String) extends Param[Seq[String]](parent, name, doc) {
+
+  override def jsonEncode(value: Seq[String]): String = {
+    import org.json4s.JsonDSL._
+    compact(render(value))
+  }
+
+  override def jsonDecode(json: String): Seq[String] = {
+    implicit val formats = DefaultFormats
+    parse(json).extract[Seq[String]]
+  }
+}

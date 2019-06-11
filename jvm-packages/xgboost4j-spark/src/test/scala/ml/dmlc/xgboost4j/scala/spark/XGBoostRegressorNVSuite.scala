@@ -61,6 +61,13 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret && ret < 20)
+    // Save model to disk
+    model.write.overwrite().save("/tmp/regression/model")
+    // Then read it from disk
+    val lastModel = XGBoostRegressionModel.load("/tmp/regression/model")
+    val lastRet = lastModel.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
+    // Allow big range since we don't care the accuracy
+    assert(0 < lastRet && lastRet < 20)
 
     // Train with eval set(s)
     val evalDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
