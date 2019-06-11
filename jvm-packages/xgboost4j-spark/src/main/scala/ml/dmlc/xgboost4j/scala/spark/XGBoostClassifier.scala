@@ -17,11 +17,10 @@
 package ml.dmlc.xgboost4j.scala.spark
 
 import ml.dmlc.xgboost4j.java.Rabit
-import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.scala.spark.params._
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, EvalTrait, ObjectiveTrait, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
-import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import org.apache.hadoop.fs.Path
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
@@ -36,6 +35,7 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.json4s.DefaultFormats
+
 import scala.collection.JavaConverters._
 import scala.collection.{AbstractIterator, Iterator, mutable}
 
@@ -206,9 +206,9 @@ class XGBoostClassifier (
 
   override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
 
-  private def getNumberClasses(dataset: NVDataset, maxNumClass: Int = 100): Int = {
+  private def getNumberClasses(dataset: GpuDataset, maxNumClass: Int = 100): Int = {
      /*
-      * Now NVDataset does not support to get classes number,
+      * Now GpuDataset does not support to get classes number,
       * So try to figure it out in this order:
       * 1) From the StructField of label
       * 2) From evalMetric
@@ -236,7 +236,7 @@ class XGBoostClassifier (
     }
   }
 
-  def fit(dataset: NVDataset): XGBoostClassificationModel = {
+  def fit(dataset: GpuDataset): XGBoostClassificationModel = {
     if (!isDefined(evalMetric) || $(evalMetric).isEmpty) {
       set(evalMetric, setupDefaultEvalMetric())
     }
@@ -244,7 +244,7 @@ class XGBoostClassifier (
       set(objectiveType, "classification")
     }
     val _numClasses = getNumberClasses(dataset)
-    this.logInfo(s"Got 'numClass'=${_numClasses} for NVDataset")
+    this.logInfo(s"Got 'numClass'=${_numClasses} for GpuDataset")
     if (isDefined(numClass)) {
       require((_numClasses == 2 && $(numClass) == 1) ||
         (_numClasses != 2 && _numClasses == $(numClass)),
@@ -254,8 +254,8 @@ class XGBoostClassifier (
       require(_numClasses == 2, "Param 'num_class' should be set for multiple classification!")
     }
     val derivedXGBParamMap = MLlib2XGBoostParams
-    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap,
-      getNvEvalSets(xgboostParams), false)
+    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, derivedXGBParamMap,
+      getGpuEvalSets(xgboostParams), false)
     val model = new XGBoostClassificationModel(uid, _numClasses, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)
@@ -335,7 +335,7 @@ class XGBoostClassificationModel private[ml](
     throw new Exception("XGBoost-Spark does not support \'raw2probabilityInPlace\'")
   }
 
-  private def transformInternal(dataset: NVDataset): DataFrame = {
+  private def transformInternal(dataset: GpuDataset): DataFrame = {
     val schema = StructType(dataset.schema.fields ++
       Seq(StructField(name = _rawPredictionCol, dataType =
         ArrayType(FloatType, containsNull = false), nullable = false)) ++
@@ -358,17 +358,17 @@ class XGBoostClassificationModel private[ml](
         s"Expect [${featuresColNames.mkString(", ")}], " +
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
-    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
+    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
       val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
 
-      val gdfColsHandles = indices.map(_.map(nvColumnBatch.getColumn))
+      val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
       val dm = new DMatrix(gdfColsHandles(0))
 
       Rabit.init(rabitEnv.asJava)
       try {
         val Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
-        produceResultIterator(NVDataset.columnBatchToRows(nvColumnBatch),
+        produceResultIterator(GpuDataset.columnBatchToRows(columnBatch),
           rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
       } finally {
         Rabit.shutdown()
@@ -519,7 +519,7 @@ class XGBoostClassificationModel private[ml](
     Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
   }
 
-  def transform(dataset: NVDataset): DataFrame = {
+  def transform(dataset: GpuDataset): DataFrame = {
     // transformSchema(dataset.schema, logging = true)
     if (isDefined(thresholds)) {
       require($(thresholds).length == numClasses, this.getClass.getSimpleName +

@@ -14,7 +14,7 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.scala.spark.nvidia
+package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.SparkSession
@@ -22,12 +22,12 @@ import org.apache.spark.sql.execution.datasources.{DataSource, HadoopFsRelation}
 
 import scala.collection.JavaConverters._
 
-class NVDataReader(sparkSession: SparkSession) {
+class GpuDataReader(sparkSession: SparkSession) {
 
   /**
     * Specifies the input data source format.
     */
-  def format(source: String): NVDataReader = {
+  def format(source: String): GpuDataReader = {
     this.source = source
     this
   }
@@ -35,7 +35,7 @@ class NVDataReader(sparkSession: SparkSession) {
   /**
     * Specifies the input schema to use when parsing data.
     */
-  def schema(schema: StructType): NVDataReader = {
+  def schema(schema: StructType): GpuDataReader = {
     specifiedSchema = Option(schema)
     this
   }
@@ -47,7 +47,7 @@ class NVDataReader(sparkSession: SparkSession) {
     *   spark.read.schema("a INT, b STRING, c DOUBLE").csv("test.csv")
     * }}}
     */
-  def schema(schemaString: String): NVDataReader = {
+  def schema(schemaString: String): GpuDataReader = {
     this.specifiedSchema = Option(StructType.fromDDL(schemaString))
     this
   }
@@ -55,7 +55,7 @@ class NVDataReader(sparkSession: SparkSession) {
   /**
     * Adds an input option for the underlying data source.
     */
-  def option(key: String, value: String): NVDataReader = {
+  def option(key: String, value: String): GpuDataReader = {
     extraOptions += (key -> value)
     this
   }
@@ -63,22 +63,22 @@ class NVDataReader(sparkSession: SparkSession) {
   /**
     * Adds an input option for the underlying data source.
     */
-  def option(key: String, value: Boolean): NVDataReader = option(key, value.toString)
+  def option(key: String, value: Boolean): GpuDataReader = option(key, value.toString)
 
   /**
     * Adds an input option for the underlying data source.
     */
-  def option(key: String, value: Long): NVDataReader = option(key, value.toString)
+  def option(key: String, value: Long): GpuDataReader = option(key, value.toString)
 
   /**
     * Adds an input option for the underlying data source.
     */
-  def option(key: String, value: Double): NVDataReader = option(key, value.toString)
+  def option(key: String, value: Double): GpuDataReader = option(key, value.toString)
 
   /**
     * (Scala-specific) Adds input options for the underlying data source.
     */
-  def options(options: scala.collection.Map[String, String]): NVDataReader = {
+  def options(options: scala.collection.Map[String, String]): GpuDataReader = {
     extraOptions ++= options
     this
   }
@@ -86,34 +86,34 @@ class NVDataReader(sparkSession: SparkSession) {
   /**
     * Adds input options for the underlying data source.
     */
-  def options(options: java.util.Map[String, String]): NVDataReader = {
+  def options(options: java.util.Map[String, String]): GpuDataReader = {
     this.options(options.asScala)
     this
   }
 
   /**
-    * Loads input in as an `NVDataset`, for data sources that don't require a path (e.g. external
+    * Loads input in as a `GpuDataset`, for data sources that don't require a path (e.g. external
     * key-value stores).
     */
-  def load(): NVDataset = {
+  def load(): GpuDataset = {
     load(Seq.empty: _*) // force invocation of `load(...varargs...)`
   }
 
   /**
-    * Loads input in as an `NVDataset`, for data sources that require a path (e.g. data backed by
+    * Loads input in as a `GpuDataset`, for data sources that require a path (e.g. data backed by
     * a local or distributed file system).
     */
-  def load(path: String): NVDataset = {
+  def load(path: String): GpuDataset = {
     // force invocation of `load(...varargs...)`
     option("path", path).load(Seq.empty: _*)
   }
 
   /**
-    * Loads input in as an `NVDataset`, for data sources that support multiple paths.
+    * Loads input in as a `GpuDataset`, for data sources that support multiple paths.
     * Only works if the source is a HadoopFsRelationProvider.
     */
   @scala.annotation.varargs
-  def load(paths: String*): NVDataset = {
+  def load(paths: String*): GpuDataset = {
     val sourceType = sourceTypeMap.getOrElse(source.toLowerCase(),
       throw new UnsupportedOperationException("Unsupported input format: " + source))
     val optionsMap = extraOptions.toMap
@@ -126,21 +126,21 @@ class NVDataReader(sparkSession: SparkSession) {
   }
 
   protected def createDataset(relation: HadoopFsRelation, sourceType: String,
-      sourceOptions: Map[String, String]): NVDataset = {
-    new NVDataset(relation, sourceType, sourceOptions)
+      sourceOptions: Map[String, String]): GpuDataset = {
+    new GpuDataset(relation, sourceType, sourceOptions)
   }
 
   /**
-    * Loads a CSV file and returns the result as an `NVDataset`. See the documentation on the
+    * Loads a CSV file and returns the result as a `GpuDataset`. See the documentation on the
     * other overloaded `csv()` method for more details.
     */
-  def csv(path: String): NVDataset = {
+  def csv(path: String): GpuDataset = {
     // This method ensures that calls that explicit need single argument works, see SPARK-16009
     csv(Seq(path): _*)
   }
 
   /**
-    * Loads CSV files and returns the result as an `NVDataset`.
+    * Loads CSV files and returns the result as a `GpuDataset`.
     * You can set the following CSV-specific options to deal with CSV files:
     * <ul>
     * <li>`sep` (default `,`): sets a single character as a separator for each
@@ -154,19 +154,19 @@ class NVDataReader(sparkSession: SparkSession) {
     * </ul>
     */
   @scala.annotation.varargs
-  def csv(paths: String*): NVDataset = format("csv").load(paths : _*)
+  def csv(paths: String*): GpuDataset = format("csv").load(paths : _*)
 
   /**
-    * Loads a Parquet file, returning the result as an `NVDataset`. See the documentation
+    * Loads a Parquet file, returning the result as a `GpuDataset`. See the documentation
     * on the other overloaded `parquet()` method for more details.
     */
-  def parquet(path: String): NVDataset = {
+  def parquet(path: String): GpuDataset = {
     // This method ensures that calls that explicit need single argument works, see SPARK-16009
     parquet(Seq(path): _*)
   }
 
   /**
-    * Loads a Parquet file, returning the result as an `NVDataset`.
+    * Loads a Parquet file, returning the result as a `GpuDataset`.
     *
     * You can set the following Parquet-specific option(s) for reading Parquet files:
     * <ul>
@@ -176,7 +176,7 @@ class NVDataReader(sparkSession: SparkSession) {
     * </ul>
     */
   @scala.annotation.varargs
-  def parquet(paths: String*): NVDataset = {
+  def parquet(paths: String*): GpuDataset = {
     format("parquet").load(paths: _*)
   }
 
@@ -197,6 +197,6 @@ class NVDataReader(sparkSession: SparkSession) {
   )
 }
 
-object NVDataReader {
-  def apply(spark: SparkSession): NVDataReader = new NVDataReader(spark)
+object GpuDataReader {
+  def apply(spark: SparkSession): GpuDataReader = new GpuDataReader(spark)
 }

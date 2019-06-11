@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.scala.spark.nvidia
+package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.io.FileNotFoundException
 import java.util.NoSuchElementException
 
 import ai.rapids.cudf.Table
-import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.hadoop.conf.Configuration
 import org.apache.parquet.io.ParquetDecodingException
 import org.apache.spark.{Partition, SerializableWritable, TaskContext}
@@ -31,26 +31,26 @@ import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFil
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.types.StructType
 
-private[spark] class NVDatasetRDD(
+private[spark] class GpuDatasetRDD(
     @transient private val sparkSession: SparkSession,
     broadcastedConf: Broadcast[SerializableWritable[Configuration]],
     readFunction: (Configuration, PartitionedFile) => Table with AutoCloseable,
     @transient val filePartitions: Seq[FilePartition],
     schema: StructType)
-  extends RDD[NVColumnBatch](sparkSession.sparkContext, Nil) {
+  extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
 
-  // The resulting iterator will only return a single NVColumnBatch.
-  override def compute(split: Partition, context: TaskContext): Iterator[NVColumnBatch] = {
+  // The resulting iterator will only return a single GpuColumnBatch.
+  override def compute(split: Partition, context: TaskContext): Iterator[GpuColumnBatch] = {
     val conf: Configuration = broadcastedConf.value.value
-    val iterator = new Iterator[NVColumnBatch] with AutoCloseable {
-      private[this] var batchedTable = NVDatasetRDD.buildBatch(conf, readFunction,
+    val iterator = new Iterator[GpuColumnBatch] with AutoCloseable {
+      private[this] var batchedTable = GpuDatasetRDD.buildBatch(conf, readFunction,
           split.asInstanceOf[FilePartition].files)
-      private[this] var resultBatch: Option[NVColumnBatch] =
-          batchedTable.map({ new NVColumnBatch(_, schema) })
+      private[this] var resultBatch: Option[GpuColumnBatch] =
+          batchedTable.map({ new GpuColumnBatch(_, schema) })
 
       override def hasNext: Boolean = resultBatch.isDefined
 
-      override def next(): NVColumnBatch = {
+      override def next(): GpuColumnBatch = {
         val batch = resultBatch.getOrElse(throw new NoSuchElementException)
         resultBatch = None
         batch
@@ -85,7 +85,7 @@ private[spark] class NVDatasetRDD(
   }
 }
 
-private[spark] object NVDatasetRDD {
+private[spark] object GpuDatasetRDD {
 
   private def buildBatch(conf: Configuration, readFunc: (Configuration, PartitionedFile) => Table,
       partfiles: Seq[PartitionedFile]): Option[Table] = {

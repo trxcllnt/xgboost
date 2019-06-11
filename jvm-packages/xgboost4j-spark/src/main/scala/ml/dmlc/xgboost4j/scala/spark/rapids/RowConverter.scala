@@ -14,10 +14,10 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.scala.spark.nvidia
+package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StructType, TimestampType}
+import org.apache.spark.sql.types._
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema
 import org.apache.spark.sql.catalyst.util.DateTimeUtils

@@ -14,18 +14,18 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.java.spark.nvidia;
+package ml.dmlc.xgboost4j.java.spark.rapids;
 
 import ai.rapids.cudf.ColumnVector;
 
 import ai.rapids.cudf.Table;
 import org.apache.spark.sql.types.StructType;
 
-public class NVColumnBatch {
+public class GpuColumnBatch {
   private final Table table;
   private final StructType schema;
 
-  public NVColumnBatch(Table table, StructType schema) {
+  public GpuColumnBatch(Table table, StructType schema) {
     this.table = table;
     this.schema = schema;
   }

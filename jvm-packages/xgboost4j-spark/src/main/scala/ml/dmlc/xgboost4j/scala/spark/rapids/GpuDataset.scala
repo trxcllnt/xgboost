@@ -14,54 +14,54 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.scala.spark.nvidia
+package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 import ai.rapids.cudf.{CSVOptions, DType, ParquetOptions, Table}
-import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
 import org.apache.hadoop.io.compress.CompressionCodecFactory
+import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile}
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StructType, TimestampType}
-import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
+import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.QueryExecutionException
+import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
 
-class NVDataset(fsRelation: HadoopFsRelation,
+class GpuDataset(fsRelation: HadoopFsRelation,
     sourceType: String,
     sourceOptions: Map[String, String],
     specifiedPartitions: Option[Seq[FilePartition]] = None) {
 
-  private val logger = LogFactory.getLog(classOf[NVDataset])
+  private val logger = LogFactory.getLog(classOf[GpuDataset])
 
   /** Returns the schema of the data. */
   def schema: StructType = fsRelation.schema
 
   /**
     *  Return an [[RDD]] of column batches.
-    *  NOTE: NVColumnBatch is NOT serializable, so one has to be very careful in
+    *  NOTE: GpuColumnBatch is NOT serializable, so one has to be very careful in
     *        the types of operations performed on this RDD!
     */
-  private[xgboost4j] def buildRDD: RDD[NVColumnBatch] = {
-    val partitionReader = NVDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
+  private[xgboost4j] def buildRDD: RDD[GpuColumnBatch] = {
+    val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
       schema, sourceOptions)
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
     val serializableConf = new SerializableWritable[Configuration](hadoopConf)
     val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
-    new NVDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader, partitions, schema)
+    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader, partitions, schema)
   }
 
   /**
@@ -69,14 +69,14 @@ class NVDataset(fsRelation: HadoopFsRelation,
     * to each partition of this data.
     */
   private[xgboost4j] def mapColumnarSingleBatchPerPartition[U: ClassTag](
-      func: NVColumnBatch => Iterator[U]): RDD[U] = {
-    buildRDD.mapPartitions(NVDataset.getMapper(func))
+      func: GpuColumnBatch => Iterator[U]): RDD[U] = {
+    buildRDD.mapPartitions(GpuDataset.getMapper(func))
   }
 
-  /** Return a new NVDataset that has exactly numPartitions partitions. */
-  def repartition(numPartitions: Int): NVDataset = {
+  /** Return a new GpuDataset that has exactly numPartitions partitions. */
+  def repartition(numPartitions: Int): GpuDataset = {
     if (numPartitions == partitions.length) {
-      return new NVDataset(fsRelation, sourceType, sourceOptions, Some(partitions))
+      return new GpuDataset(fsRelation, sourceType, sourceOptions, Some(partitions))
     }
 
     // build a list of all input files sorted from largest to smallest
@@ -88,8 +88,8 @@ class NVDataset(fsRelation: HadoopFsRelation,
 
     // Seed the partition buckets with one of the largest files then iterate
     // through the rest of the files, adding each to the smallest bucket
-    val buckets = files.take(numPartitions).map(new NVDataset.PartBucket(_))
-    def bucketOrder(b: NVDataset.PartBucket) = -b.getSize
+    val buckets = files.take(numPartitions).map(new GpuDataset.PartBucket(_))
+    def bucketOrder(b: GpuDataset.PartBucket) = -b.getSize
     val queue = mutable.PriorityQueue(buckets: _*)(Ordering.by(bucketOrder))
     for (file <- files.drop(numPartitions)) {
       val bucket = queue.dequeue()
@@ -98,7 +98,7 @@ class NVDataset(fsRelation: HadoopFsRelation,
     }
 
     val newPartitions = buckets.zipWithIndex.map{case (b, i) => b.toFilePartition(i)}
-    new NVDataset(fsRelation, sourceType, sourceOptions, Some(newPartitions))
+    new GpuDataset(fsRelation, sourceType, sourceOptions, Some(newPartitions))
   }
 
   /**
@@ -107,7 +107,7 @@ class NVDataset(fsRelation: HadoopFsRelation,
     */
   def findNumClasses(labelCol: String): Int = {
     val fieldIndex = schema.fieldIndex(labelCol)
-    val rdd = mapColumnarSingleBatchPerPartition(NVDataset.maxDoubleMapper(fieldIndex))
+    val rdd = mapColumnarSingleBatchPerPartition(GpuDataset.maxDoubleMapper(fieldIndex))
     val maxVal = rdd.reduce(Math.max)
     val numClasses = maxVal + 1
     require(numClasses.isValidInt, s"Found max label value =" +
@@ -115,10 +115,10 @@ class NVDataset(fsRelation: HadoopFsRelation,
     numClasses.toInt
   }
 
-  /** The SparkSession that created this NVDataset. */
+  /** The SparkSession that created this GpuDataset. */
   def sparkSession: SparkSession = fsRelation.sparkSession
 
-  private[nvidia] lazy val partitions: Seq[FilePartition] = specifiedPartitions.getOrElse{
+  private[rapids] lazy val partitions: Seq[FilePartition] = specifiedPartitions.getOrElse{
     val selectedPartitions = fsRelation.location.listFiles(Nil, Nil)
     val openCostInBytes = fsRelation.sparkSession.sessionState.conf.filesOpenCostInBytes
     val maxSplitBytes = computeMaxSplitBytes(fsRelation.sparkSession, selectedPartitions)
@@ -260,12 +260,12 @@ class NVDataset(fsRelation: HadoopFsRelation,
   }
 }
 
-object NVDataset {
-  private val logger = LogFactory.getLog(classOf[NVDataset])
+object GpuDataset {
+  private val logger = LogFactory.getLog(classOf[GpuDataset])
 
-  private def getMapper[U: ClassTag](func: NVColumnBatch => Iterator[U]):
-      Iterator[NVColumnBatch] => Iterator[U] = {
-    batchIter: Iterator[NVColumnBatch] => {
+  private def getMapper[U: ClassTag](func: GpuColumnBatch => Iterator[U]):
+      Iterator[GpuColumnBatch] => Iterator[U] = {
+    batchIter: Iterator[GpuColumnBatch] => {
       if (batchIter.hasNext) {
         val batch = batchIter.next
         if (batchIter.hasNext) {
@@ -278,8 +278,8 @@ object NVDataset {
     }
   }
 
-  private def maxDoubleMapper(columnIndex: Int): NVColumnBatch => Iterator[Double] =
-    (b: NVColumnBatch) => {
+  private def maxDoubleMapper(columnIndex: Int): GpuColumnBatch => Iterator[Double] =
+    (b: GpuColumnBatch) => {
       val column = b.getColumnVector(columnIndex)
       val scalar = column.max()
       if (scalar.isValid) {
@@ -289,7 +289,7 @@ object NVDataset {
       }
     }
 
-  private[xgboost4j] def columnBatchToRows(batch: NVColumnBatch): Iterator[Row] = {
+  private[xgboost4j] def columnBatchToRows(batch: GpuColumnBatch): Iterator[Row] = {
     val taskContext = TaskContext.get
     val iter = new Iterator[Row] with AutoCloseable {
       private val numRows = batch.getNumRows
