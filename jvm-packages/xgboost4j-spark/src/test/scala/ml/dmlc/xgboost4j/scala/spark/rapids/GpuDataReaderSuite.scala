@@ -14,7 +14,7 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.scala.spark.nvidia
+package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.sql.SparkSession
@@ -22,12 +22,12 @@ import org.apache.spark.sql.execution.datasources.HadoopFsRelation
 import org.apache.spark.sql.types.{BooleanType, DoubleType, IntegerType, StructType}
 import org.scalatest.FunSuite
 
-class NVDataReaderSuite extends FunSuite with PerTest {
+class GpuDataReaderSuite extends FunSuite with PerTest {
   private lazy val RANK_TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val RANK_TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
 
   test("csv parsing with DDL schema") {
-    val reader = new NVDataReaderForTest(ss)
+    val reader = new GpuDataReaderForTest(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
@@ -35,7 +35,7 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 
   test("csv parsing with StructType schema") {
-    val reader = new NVDataReaderForTest(ss)
+    val reader = new GpuDataReaderForTest(ss)
     val csvSchema = new StructType()
       .add("a", BooleanType)
       .add("b", DoubleType)
@@ -48,7 +48,7 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 
   test("csv parsing with format/load") {
-    val reader = new NVDataReaderForTest(ss)
+    val reader = new GpuDataReaderForTest(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.format("CSV").schema(csvSchema).load(RANK_TRAIN_CSV_PATH)
     assert(dataset != null)
@@ -56,7 +56,7 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 
   test("parquet parsing with DDL schema") {
-    val reader = new NVDataReaderForTest(ss)
+    val reader = new GpuDataReaderForTest(ss)
     val specSchema = "a BOOLEAN, c DOUBLE, e INT"
     val dataset = reader.schema(specSchema).parquet(RANK_TRAIN_PARQUET_PATH)
     assert(dataset != null)
@@ -73,7 +73,7 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 
   test("parquet parsing with StructType schema") {
-    val reader = new NVDataReaderForTest(ss)
+    val reader = new GpuDataReaderForTest(ss)
     val specSchema = new StructType()
       .add("a", BooleanType)
       .add("e", IntegerType)
@@ -90,7 +90,7 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 
   test("parquet parsing with format/load") {
-    val reader = new NVDataReaderForTest(ss)
+    val reader = new GpuDataReaderForTest(ss)
     val dataset = reader.format("parquet").load(RANK_TRAIN_PARQUET_PATH)
     assert(dataset != null)
     assertResult("parquet") { reader.savedSourceType }
@@ -98,18 +98,18 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 
   test("invalid format type specified") {
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     assertThrows[UnsupportedOperationException] {
       reader.format("badformat").load(RANK_TRAIN_CSV_PATH)
     }
   }
 
-  private def rankTrainCsvAssertions(reader: NVDataReaderForTest): Unit = {
+  private def rankTrainCsvAssertions(reader: GpuDataReaderForTest): Unit = {
     assertResult("csv") { reader.savedSourceType }
     assertRankTrainLoad(reader)
   }
 
-  private def assertRankTrainLoad(reader: NVDataReaderForTest): Unit = {
+  private def assertRankTrainLoad(reader: GpuDataReaderForTest): Unit = {
     val schema = reader.savedRelation.schema
     assertResult(1) { reader.savedRelation.inputFiles.length }
     assertResult(5) { schema.length }
@@ -131,13 +131,13 @@ class NVDataReaderSuite extends FunSuite with PerTest {
   }
 }
 
-class NVDataReaderForTest(sparkSession: SparkSession) extends NVDataReader(sparkSession) {
+class GpuDataReaderForTest(sparkSession: SparkSession) extends GpuDataReader(sparkSession) {
   var savedRelation: HadoopFsRelation = _
   var savedSourceType: String = _
   var savedSourceOptions: Map[String, String] = _
 
   override protected def createDataset(relation: HadoopFsRelation,
-    sourceType: String, sourceOptions: Map[String, String]): NVDataset = {
+    sourceType: String, sourceOptions: Map[String, String]): GpuDataset = {
     savedRelation = relation
     savedSourceType = sourceType
     savedSourceOptions = sourceOptions

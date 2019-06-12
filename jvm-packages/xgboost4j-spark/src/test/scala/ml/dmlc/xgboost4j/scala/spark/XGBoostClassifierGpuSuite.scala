@@ -16,29 +16,29 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
-import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataReader
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataReader
 import ml.dmlc.xgboost4j.scala.{DMatrix, XGBoost => ScalaXGBoost}
 import org.apache.spark.ml.linalg.{DenseVector, Vectors}
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{FloatType, IntegerType, StructType}
 import org.scalatest.FunSuite
 
-class XGBoostClassifierNVSuite extends FunSuite with PerTest {
+class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
 
   override def afterEach(): Unit = {
     super.afterEach()
-    NVDatasetData.classifierCleanUp()
+    GpuDatasetData.classifierCleanUp()
   }
 
   test("test XGBoost-Spark XGBoostClassifier setFeaturesCols") {
-    val nvClassifier = new XGBoostClassifier(Map("objective" -> "multi:softprob"))
+    val classifier = new XGBoostClassifier(Map("objective" -> "multi:softprob"))
       .setFeaturesCols(Seq("gdfCol1", "gdfCol2"))
-    assert(nvClassifier.getFeaturesCols.contains("gdfCol1"))
-    assert(nvClassifier.getFeaturesCols.contains("gdfCol2"))
-    assert(nvClassifier.getFeaturesCols.length == 2)
+    assert(classifier.getFeaturesCols.contains("gdfCol1"))
+    assert(classifier.getFeaturesCols.contains("gdfCol2"))
+    assert(classifier.getFeaturesCols.length == 2)
   }
 
-  test("test XGBoost-Spark XGBoostClassifier the overloaded 'fit' should work with NVDataset") {
+  test("test XGBoost-Spark XGBoostClassifier the overloaded 'fit' should work with GpuDataset") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.2f,
@@ -52,25 +52,25 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       .add("c", FloatType)
       .add("d", FloatType)
       .add("e", IntegerType)
-    val trainDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
-    val nvClassifier = new XGBoostClassifier(paramMap)
+    val trainDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
+    val classifier = new XGBoostClassifier(paramMap)
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
 
     // num_class is required for multiple classification
-    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
     // Invalid num_class
-    nvClassifier.setNumClass(-1)
-    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+    classifier.setNumClass(-1)
+    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
     // num_class can be verified by automatic detection
-    nvClassifier.setNumClass(50)
-    assertThrows[IllegalArgumentException](nvClassifier.fit(trainDataAsNVDS))
+    classifier.setNumClass(50)
+    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
 
     // Per the training data, num classes is 21
-    nvClassifier.setNumClass(21)
+    classifier.setNumClass(21)
 
     // Train without eval set(s)
-    val model = nvClassifier.fit(trainDataAsNVDS)
+    val model = classifier.fit(trainDataAsGpuDS)
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret && ret < 20)
@@ -84,27 +84,27 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(0 < lastRet && lastRet < 20)
 
     // Train with eval set(s)
-    val evalDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
+    val evalDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
     // 1) Set via xgboost ML API
-    nvClassifier.setNvEvalSets(Map("test" -> evalDataAsNVDS))
-    val model2 = nvClassifier.fit(trainDataAsNVDS)
+    classifier.setGpuEvalSets(Map("test" -> evalDataAsGpuDS))
+    val model2 = classifier.fit(trainDataAsGpuDS)
     val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret2 && ret2 < 20)
     // 2) Set via param map
     val model3 = new XGBoostClassifier(paramMap ++ Array(
       "num_class" -> 21,
-      "eval_sets" -> Map("test" -> evalDataAsNVDS)))
+      "eval_sets" -> Map("test" -> evalDataAsGpuDS)))
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
-      .fit(trainDataAsNVDS)
+      .fit(trainDataAsGpuDS)
     val ret3 = model3.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     assert(0 < ret3 && ret3 < 20)
     assert(ret2 === ret3)
   }
 
-  test("NV Classifier XGBoost-Spark XGBoostClassifier output should match XGBoost4j") {
-    val (trainFeaturesHandle, trainLabelsHandle) = NVDatasetData.classifierTrain
+  test("GPU Classifier XGBoost-Spark XGBoostClassifier output should match XGBoost4j") {
+    val (trainFeaturesHandle, trainLabelsHandle) = GpuDatasetData.classifierTrain
     assert(trainFeaturesHandle.nonEmpty)
     assert(trainFeaturesHandle.size == 4)
     assert(trainLabelsHandle.nonEmpty)
@@ -113,7 +113,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     val trainingDM = new DMatrix(trainFeaturesHandle)
     trainingDM.setCUDFInfo("label", trainLabelsHandle)
 
-    val (testFeaturesHandle, _) = NVDatasetData.classifierTest
+    val (testFeaturesHandle, _) = GpuDatasetData.classifierTest
     assert(testFeaturesHandle.nonEmpty)
     assert(testFeaturesHandle.size == 4)
 
@@ -132,15 +132,15 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     val model1 = ScalaXGBoost.train(trainingDM, paramMap, round)
     val prediction1 = model1.predict(testDM)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
     val model2 = new XGBoostClassifier(paramMap ++ Array("num_round" -> round,
       "num_workers" -> 1))
       .setFeaturesCols(featureCols)
       .setLabelCol("classIndex")
       .fit(trainingDF)
 
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
     val prediction2 = model2.transform(testDF)
       .collect().map(row => row.getAs[DenseVector]("probability"))
 
@@ -170,10 +170,10 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     testDM.delete()
   }
 
-  test("NV Classifier Set params in XGBoost and MLlib way should produce same model") {
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+  test("GPU Classifier Set params in XGBoost and MLlib way should produce same model") {
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val round = 100
     val paramMap = Map("eta" -> 0.1f,
@@ -213,7 +213,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     }
   }
 
-  test("NV Classifier test schema of XGBoostClassificationModel") {
+  test("GPU Classifier test schema of XGBoostClassificationModel") {
     val paramMap = Map("eta" -> 0.1f,
       "max_depth" -> 2,
       "objective" -> "multi:softprob",
@@ -223,9 +223,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       "tree_method" -> "gpu_hist",
       "max_bin" -> 16)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val model = new XGBoostClassifier(paramMap)
       .setFeaturesCols(featureCols)
@@ -254,7 +254,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(model.summary.validationObjectiveHistory.isEmpty)
   }
 
-  test("NV Classifier test predictionLeaf") {
+  test("GPU Classifier test predictionLeaf") {
     val paramMap = Map("eta" -> 0.1f,
       "max_depth" -> 2,
       "objective" -> "multi:softprob",
@@ -264,9 +264,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       "tree_method" -> "gpu_hist",
       "max_bin" -> 16)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val groundTruth = testRows
     val xgb = new XGBoostClassifier(paramMap)
@@ -279,7 +279,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(resultDF.columns.contains("predictLeaf"))
   }
 
-  test("NV Classifier test predictionLeaf with empty column name") {
+  test("GPU Classifier test predictionLeaf with empty column name") {
     val paramMap = Map("eta" -> 0.1f,
       "max_depth" -> 2,
       "objective" -> "multi:softprob",
@@ -289,9 +289,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       "tree_method" -> "gpu_hist",
       "max_bin" -> 16)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val xgb = new XGBoostClassifier(paramMap)
       .setFeaturesCols(featureCols)
@@ -302,7 +302,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(!resultDF.columns.contains("predictLeaf"))
   }
 
-  test("NV Classifier test predictionContrib") {
+  test("GPU Classifier test predictionContrib") {
     val paramMap = Map("eta" -> 0.1f,
       "max_depth" -> 2,
       "objective" -> "multi:softprob",
@@ -312,9 +312,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       "tree_method" -> "gpu_hist",
       "max_bin" -> 16)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val groundTruth = testRows
     val xgb = new XGBoostClassifier(paramMap)
@@ -327,7 +327,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(resultDF.columns.contains("predictContrib"))
   }
 
-  test("NV Classifier test predictionContrib with empty column name") {
+  test("GPU Classifier test predictionContrib with empty column name") {
     val paramMap = Map("eta" -> 0.1f,
       "max_depth" -> 2,
       "objective" -> "multi:softprob",
@@ -337,9 +337,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       "tree_method" -> "gpu_hist",
       "max_bin" -> 16)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val xgb = new XGBoostClassifier(paramMap)
       .setFeaturesCols(featureCols)
@@ -350,7 +350,7 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
     assert(!resultDF.columns.contains("predictContrib"))
   }
 
-  test("NV Classifier test predictionLeaf and predictionContrib") {
+  test("GPU Classifier test predictionLeaf and predictionContrib") {
     val paramMap = Map("eta" -> 0.1f,
       "max_depth" -> 2,
       "objective" -> "multi:softprob",
@@ -360,9 +360,9 @@ class XGBoostClassifierNVSuite extends FunSuite with PerTest {
       "tree_method" -> "gpu_hist",
       "max_bin" -> 16)
 
-    val trainingDF = NVDatasetData.getClassifierTrainNVDataset(ss)
-    val featureCols = NVDatasetData.classifierFeatureCols
-    val (testDF, testRows) = NVDatasetData.getClassifierTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getClassifierTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.classifierFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getClassifierTestGpuDataset(ss)
 
     val groundTruth = testRows
     val xgb = new XGBoostClassifier(paramMap)

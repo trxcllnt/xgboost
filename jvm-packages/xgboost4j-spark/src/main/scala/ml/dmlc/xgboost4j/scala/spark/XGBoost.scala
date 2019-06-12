@@ -23,9 +23,9 @@ import scala.collection.{AbstractIterator, mutable}
 import scala.util.Random
 import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, RabitTracker => PyRabitTracker}
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
-import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.scala.spark.params.BoosterParams
 import ml.dmlc.xgboost4j.scala.spark.params.LearningTaskParams
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
 import ml.dmlc.xgboost4j.scala.{XGBoost => SXGBoost, _}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.io.FileUtils
@@ -67,7 +67,7 @@ private[spark] case class XGBLabeledPointGroup(
     isEdgeGroup: Boolean)
 
 private case class GDFColumnData(
-    rawDataset: NVDataset,
+    rawDataset: GpuDataset,
     colsIndices: Seq[Array[Int]])
 
 object XGBoost extends Serializable {
@@ -308,7 +308,7 @@ object XGBoost extends Serializable {
     if (params.contains("train_test_ratio")) {
       logger.warn("train_test_ratio is deprecated since XGBoost 0.82, we recommend to explicitly" +
         " pass a training and multiple evaluation datasets by passing 'eval_sets' as" +
-        " Map('name'->'Dataset') for CPU or Map('name'->'NVDataset') for GPU.")
+        " Map('name'->'Dataset') for CPU or Map('name'->'GpuDataset') for GPU.")
     }
     require(nWorkers > 0, "you must specify more than 0 workers")
     if (obj != null) {
@@ -424,7 +424,7 @@ object XGBoost extends Serializable {
         updatedParams = updatedParams + (treeMethod -> "gpu_hist")
       } else {
         require(tmValue.startsWith("gpu_"),
-          "Now for NVDataset, xgboost-spark only supports tree_method as " +
+          "Now for GpuDataset, xgboost-spark only supports tree_method as " +
             s"[${BoosterParams.supportedTreeMethods.filter(_.startsWith("gpu_")).mkString(", ")}]" +
             s", but found '$tmValue'")
       }
@@ -456,36 +456,36 @@ object XGBoost extends Serializable {
     indices
   }
 
-  // repartition all the NVDatasets (training and evaluation) to nWorkers,
-  // And get the GDF column indices separately from each NVDataset.
-  // Then wrap the NVDatasets and its indices into a map
-  private def prepareDataForNVDataset(
-      trainingData: NVDataset,
-      evalSetsMap: Map[String, NVDataset],
+  // repartition all the GpuDatasets (training and evaluation) to nWorkers,
+  // And get the GDF column indices separately from each GpuDataset.
+  // Then wrap the GpuDatasets and its indices into a map
+  private def prepareDataForGpuDataset(
+      trainingData: GpuDataset,
+      evalSetsMap: Map[String, GpuDataset],
       nWorkers: Int,
       hasGroup: Boolean,
       params: Map[String, Any]): Map[String, GDFColumnData] = {
     // Group check
-    require(!hasGroup, "Group is NOT supported yet for NVDataset")
+    require(!hasGroup, "Group is NOT supported yet for GpuDataset")
     // Cache is not supported
     val isCacheData = params.getOrElse("cacheTrainingSet", false).asInstanceOf[Boolean]
     if (isCacheData) {
-      logger.warn("Data cache is not support for NVDataset!")
+      logger.warn("Data cache is not support for GpuDataset!")
     }
     (evalSetsMap + (trainName -> trainingData)).map {
-      case (name, nvDataset) =>
+      case (name, dataset) =>
         // Always repartition due to not easy to get the current number of
-        // partitions from NVDataset directly, just let NVDataset handle all the cases.
-        val newNvDatset = nvDataset.repartition(nWorkers)
-        // Check and get gdf columns for all NVDataset(s)
-        name -> GDFColumnData(newNvDatset, checkAndGetGDFColumnIndices(newNvDatset.schema, params))
+        // partitions from GpuDataset directly, just let GpuDataset handle all the cases.
+        val newDataset = dataset.repartition(nWorkers)
+        // Check and get gdf columns for all GpuDataset(s)
+        name -> GDFColumnData(newDataset, checkAndGetGDFColumnIndices(newDataset.schema, params))
     }
   }
 
-  // zip all the NVDatasetRDDs from NVDatasets into one RDD containing named GDF column
+  // zip all the GpuDatasetRDDs from GpuDatasets into one RDD containing named GDF column
   // native handles.
   // The transformation from column indices to native handle is done during the zipping process.
-  private def coPartitionForNVDataset(
+  private def coPartitionForGpuDataset(
       dataMap: Map[String, GDFColumnData],
       sc: SparkContext,
       nWorkers: Int): RDD[(String, Seq[Array[Long]])] = {
@@ -497,12 +497,12 @@ object XGBoost extends Serializable {
         zippedRdd.zipPartitions(gdfColData.rawDataset.buildRDD) {
           (itWrapper, itColBatch) =>
             if (itColBatch.isEmpty) {
-              logger.error("When specifying eval sets as NVDataset, you have to ensure that " +
-                "the number of elements in each NVDataset is larger than the number of workers")
+              logger.error("When specifying eval sets as GpuDataset, you have to ensure that " +
+                "the number of elements in each GpuDataset is larger than the number of workers")
               throw new Exception("Too few elements in evaluation sets!")
             }
             // Convert indices to native handles.
-            // Suppose only one NvColumnBatch for each partition
+            // Suppose only one GpuColumnBatch for each partition
             val columnBatch = itColBatch.next
             val handles = colIndices.map(_.map(columnBatch.getColumn))
             (itWrapper.toArray :+ (name -> handles)).filter(_ != null).iterator
@@ -511,7 +511,7 @@ object XGBoost extends Serializable {
   }
 
   @throws(classOf[XGBoostError])
-  private def trainForNVDataset(
+  private def trainForGpuDataset(
       sc: SparkContext,
       dataMap: Map[String, GDFColumnData],
       noEvalSet: Boolean,
@@ -535,7 +535,7 @@ object XGBoost extends Serializable {
       }.cache()
     } else {
       // Train with evaluation sets
-      coPartitionForNVDataset(dataMap, sc, nWorkers).mapPartitions {
+      coPartitionForGpuDataset(dataMap, sc, nWorkers).mapPartitions {
         nameAndColHandles =>
           val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), nameAndColHandles)
           buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
@@ -549,20 +549,20 @@ object XGBoost extends Serializable {
     * @return A tuple of the booster and the metrics used to build training summary
     */
   @throws(classOf[XGBoostError])
-  private[spark] def trainDistributedForNVDataset(
-      trainingData: NVDataset,
+  private[spark] def trainDistributedForGpuDataset(
+      trainingData: GpuDataset,
       params: Map[String, Any],
-      evalSetsMap: Map[String, NVDataset] = Map(),
+      evalSetsMap: Map[String, GpuDataset] = Map(),
       hasGroup: Boolean = false): (Booster, Map[String, Array[Float]]) = {
-    logger.info(s"NVDataset Running XGBoost ${spark.VERSION} with parameters: " +
+    logger.info(s"GpuDataset Running XGBoost ${spark.VERSION} with parameters: " +
       s"\n${params.mkString("\n")}")
     // First check and get parameters.
-    // Second check and get data for training with NVDataset
+    // Second check and get data for training with GpuDataset
     // Then setup checkpoint manager
     val sc = trainingData.sparkSession.sparkContext
     val (nWorkers, round, _, _, _, _, trackerConf, timeoutRequestWorkers,
       checkpointPath, checkpointInterval) = parameterFetchAndValidation(params, sc)
-    val dataMap = prepareDataForNVDataset(trainingData, evalSetsMap, nWorkers, hasGroup, params)
+    val dataMap = prepareDataForGpuDataset(trainingData, evalSetsMap, nWorkers, hasGroup, params)
     val checkpointManager = new CheckpointManager(sc, checkpointPath)
     checkpointManager.cleanUpHigherVersions(round.asInstanceOf[Int])
     var prevBooster = checkpointManager.loadCheckpointAsBooster
@@ -575,7 +575,7 @@ object XGBoost extends Serializable {
             val overriddenParams = overrideParamsAccordingToTaskCPUs(params, sc)
             val parallelismTracker = new SparkParallelismTracker(sc, timeoutRequestWorkers,
               nWorkers)
-            val boostersAndMetrics = trainForNVDataset(sc, dataMap, evalSetsMap.isEmpty,
+            val boostersAndMetrics = trainForGpuDataset(sc, dataMap, evalSetsMap.isEmpty,
               overriddenParams, tracker.getWorkerEnvs, checkpointRound, prevBooster)
             val sparkJobThread = new Thread() {
               override def run() {
@@ -586,7 +586,7 @@ object XGBoost extends Serializable {
             sparkJobThread.setUncaughtExceptionHandler(tracker)
             sparkJobThread.start()
             val trackerReturnVal = parallelismTracker.execute(tracker.waitFor(0L))
-            logger.info(s"NVDataset Rabit returns with exit code $trackerReturnVal")
+            logger.info(s"GpuDataset Rabit returns with exit code $trackerReturnVal")
             val (booster, metrics) = postTrackerReturnProcessing(trackerReturnVal,
               boostersAndMetrics, sparkJobThread)
             if (checkpointRound < round) {

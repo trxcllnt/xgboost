@@ -16,29 +16,29 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
-import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataReader
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataReader
 import ml.dmlc.xgboost4j.scala.{DMatrix, XGBoost => ScalaXGBoost}
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{DoubleType, IntegerType, StructType}
 import org.scalatest.FunSuite
 
-class XGBoostRegressorNVSuite extends FunSuite with PerTest {
+class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
 
   override def afterEach(): Unit = {
     super.afterEach()
-    NVDatasetData.regressionCleanUp()
+    GpuDatasetData.regressionCleanUp()
   }
 
   test("test XGBoost-Spark XGBoostRegressor setFeaturesCols") {
-    val nvRegressor = new XGBoostRegressor(Map("objective" -> "reg:squarederror"))
+    val regressor = new XGBoostRegressor(Map("objective" -> "reg:squarederror"))
       .setFeaturesCols(Seq("gdfCol1", "gdfCol2"))
-    assert(nvRegressor.getFeaturesCols.contains("gdfCol1"))
-    assert(nvRegressor.getFeaturesCols.contains("gdfCol2"))
-    assert(nvRegressor.getFeaturesCols.length == 2)
+    assert(regressor.getFeaturesCols.contains("gdfCol1"))
+    assert(regressor.getFeaturesCols.contains("gdfCol2"))
+    assert(regressor.getFeaturesCols.length == 2)
   }
 
-  test("test XGBoost-Spark XGBoostRegressor the overloaded 'fit' should work with NVDataset") {
+  test("test XGBoost-Spark XGBoostRegressor the overloaded 'fit' should work with GpuDataset") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -53,11 +53,11 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       .add("d", DoubleType)
       .add("e", IntegerType)
     // group now is not supported
-    val trainDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
-    val nvRegressor = new XGBoostRegressor(paramMap)
+    val trainDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
+    val regressor = new XGBoostRegressor(paramMap)
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
-    val model = nvRegressor.fit(trainDataAsNVDS)
+    val model = regressor.fit(trainDataAsGpuDS)
     val ret = model.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret && ret < 20)
@@ -70,26 +70,26 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     assert(0 < lastRet && lastRet < 20)
 
     // Train with eval set(s)
-    val evalDataAsNVDS = new NVDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
+    val evalDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
     // 1) Set via xgboost ML API
-    nvRegressor.setNvEvalSets(Map("test" -> evalDataAsNVDS))
-    val model2 = nvRegressor.fit(trainDataAsNVDS)
+    regressor.setGpuEvalSets(Map("test" -> evalDataAsGpuDS))
+    val model2 = regressor.fit(trainDataAsGpuDS)
     val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
     assert(0 < ret2 && ret2 < 20)
     // 2) Set via param map
     val model3 = new XGBoostRegressor(paramMap ++ Array(
-      "eval_sets" -> Map("test" -> evalDataAsNVDS)))
+      "eval_sets" -> Map("test" -> evalDataAsGpuDS)))
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
-      .fit(trainDataAsNVDS)
+      .fit(trainDataAsGpuDS)
     val ret3 = model3.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     assert(0 < ret3 && ret3 < 20)
     assert(ret2 === ret3)
   }
 
-  test("NV Regression XGBoost-Spark XGBoostRegressor output should match XGBoost4j") {
-    val (trainFeaturesHandle, trainLabelsHandle) = NVDatasetData.regressionTrain
+  test("GPU Regression XGBoost-Spark XGBoostRegressor output should match XGBoost4j") {
+    val (trainFeaturesHandle, trainLabelsHandle) = GpuDatasetData.regressionTrain
     assert(trainFeaturesHandle.nonEmpty)
     assert(trainFeaturesHandle.size == 3)
     assert(trainLabelsHandle.nonEmpty)
@@ -98,7 +98,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     val trainingDM = new DMatrix(trainFeaturesHandle)
     trainingDM.setCUDFInfo("label", trainLabelsHandle)
 
-    val (testFeaturesHandle, _) = NVDatasetData.regressionTest
+    val (testFeaturesHandle, _) = GpuDatasetData.regressionTest
     assert(testFeaturesHandle.nonEmpty)
     assert(testFeaturesHandle.size == 3)
 
@@ -120,15 +120,15 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     val model1 = ScalaXGBoost.train(trainingDM, paramMap, round)
     val prediction1 = model1.predict(testDM)
 
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
     val model2 = new XGBoostRegressor(paramMap ++ Array("num_round" -> round,
       "num_workers" -> 1))
       .setFeaturesCols(featureCols)
       .setLabelCol("e")
       .fit(trainingDF)
 
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
     val prediction2 = model2.transform(testDF).
       collect().map(row => row.getAs[Double]("prediction"))
 
@@ -146,10 +146,10 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     testDM.delete()
   }
 
-  test("NV Regression Set params in XGBoost and MLlib way should produce same model") {
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+  test("GPU Regression Set params in XGBoost and MLlib way should produce same model") {
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
 
     val paramMap = Map(
       "silent" -> 1,
@@ -186,7 +186,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     }
   }
 
-  test("NV regression test predictionLeaf") {
+  test("GPU regression test predictionLeaf") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -196,9 +196,9 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L)
 
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
 
     val groundTruth = testRows
     val xgb = new XGBoostRegressor(paramMap)
@@ -212,7 +212,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     assert(resultDF.columns.contains("predictLeaf"))
   }
 
-  test("NV regression test predictionLeaf with empty column name") {
+  test("GPU regression test predictionLeaf with empty column name") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -222,9 +222,9 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L)
 
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
 
     val xgb = new XGBoostRegressor(paramMap)
       .setFeaturesCols(featureCols)
@@ -235,7 +235,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     assert(!resultDF.columns.contains("predictLeaf"))
   }
 
-  test("NV regression test predictionContrib") {
+  test("GPU regression test predictionContrib") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -245,9 +245,9 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L)
 
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
 
     val groundTruth = testRows
     val xgb = new XGBoostRegressor(paramMap)
@@ -260,7 +260,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     assert(resultDF.columns.contains("predictContrib"))
   }
 
-  test("NV Regression test predictionContrib with empty column name") {
+  test("GPU Regression test predictionContrib with empty column name") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -270,9 +270,9 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L)
 
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
 
     val xgb = new XGBoostRegressor(paramMap)
       .setFeaturesCols(featureCols)
@@ -283,7 +283,7 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
     assert(!resultDF.columns.contains("predictContrib"))
   }
 
-  test("NV Regression test predictionLeaf and predictionContrib") {
+  test("GPU Regression test predictionLeaf and predictionContrib") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -293,9 +293,9 @@ class XGBoostRegressorNVSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L)
 
-    val trainingDF = NVDatasetData.getRegressionTrainNVDataset(ss)
-    val featureCols = NVDatasetData.regressionFeatureCols
-    val (testDF, testRows) = NVDatasetData.getRegressionTestNVDataset(ss)
+    val trainingDF = GpuDatasetData.getRegressionTrainGpuDataset(ss)
+    val featureCols = GpuDatasetData.regressionFeatureCols
+    val (testDF, testRows) = GpuDatasetData.getRegressionTestGpuDataset(ss)
 
     val groundTruth = testRows
     val xgb = new XGBoostRegressor(paramMap)

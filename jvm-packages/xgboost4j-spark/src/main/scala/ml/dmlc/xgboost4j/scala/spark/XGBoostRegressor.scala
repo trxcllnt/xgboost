@@ -18,17 +18,15 @@ package ml.dmlc.xgboost4j.scala.spark
 
 import scala.collection.{AbstractIterator, Iterator, mutable}
 import scala.collection.JavaConverters._
-
 import ml.dmlc.xgboost4j.java.{Rabit, XGBoost => JXGBoost}
-import ml.dmlc.xgboost4j.scala.spark.nvidia.NVDataset
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import ml.dmlc.xgboost4j.scala.spark.params.{DefaultXGBoostParamsReader, _}
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import org.apache.hadoop.fs.Path
-
 import org.apache.spark.TaskContext
-import org.apache.spark.ml.linalg.{Vector}
+import org.apache.spark.ml.linalg.Vector
 import org.apache.spark.ml.param.shared.HasWeightCol
 import org.apache.spark.ml.util._
 import org.apache.spark.ml._
@@ -38,7 +36,6 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.json4s.DefaultFormats
-import scala.collection.mutable.ListBuffer
 
 import org.apache.spark.broadcast.Broadcast
 
@@ -201,7 +198,7 @@ class XGBoostRegressor (
 
   override def copy(extra: ParamMap): XGBoostRegressor = defaultCopy(extra)
 
-  def fit(dataset: NVDataset): XGBoostRegressionModel = {
+  def fit(dataset: GpuDataset): XGBoostRegressionModel = {
     if (!isDefined(evalMetric) || $(evalMetric).isEmpty) {
       set(evalMetric, setupDefaultEvalMetric())
     }
@@ -210,9 +207,9 @@ class XGBoostRegressor (
     }
 
     val derivedXGBParamMap = MLlib2XGBoostParams
-    // No group support for NVDataset
-    val (_booster, _metrics) = XGBoost.trainDistributedForNVDataset(dataset, derivedXGBParamMap,
-      getNvEvalSets(xgboostParams), false)
+    // No group support for GpuDataset
+    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, derivedXGBParamMap,
+      getGpuEvalSets(xgboostParams), false)
     val model = new XGBoostRegressionModel(uid, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)
@@ -276,7 +273,7 @@ class XGBoostRegressionModel private[ml] (
     _booster.predict(data = dm)(0)(0)
   }
 
-  private def transformInternal(dataset: NVDataset): DataFrame = {
+  private def transformInternal(dataset: GpuDataset): DataFrame = {
     val schema = StructType(dataset.schema.fields ++
       Seq(StructField(name = _originalPredictionCol, dataType =
         ArrayType(FloatType, containsNull = false), nullable = false)))
@@ -297,17 +294,17 @@ class XGBoostRegressionModel private[ml] (
         s"Expect [${featuresColNames.mkString(", ")}], " +
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
-    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
+    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
       val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
 
-      val gdfColsHandles = indices.map(_.map(nvColumnBatch.getColumn))
+      val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
       val dm = new DMatrix(gdfColsHandles(0))
 
       Rabit.init(rabitEnv.asJava)
       try {
         val Array(rawPredictionItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
-        produceResultIterator(NVDataset.columnBatchToRows(nvColumnBatch),
+        produceResultIterator(GpuDataset.columnBatchToRows(columnBatch),
           rawPredictionItr, predLeafItr, predContribItr)
       } finally {
         Rabit.shutdown()
@@ -447,7 +444,7 @@ class XGBoostRegressionModel private[ml] (
     Array(originalPredictionItr, predLeafItr, predContribItr)
   }
 
-  def transform(dataset: NVDataset): DataFrame = {
+  def transform(dataset: GpuDataset): DataFrame = {
     // Output selected columns only.
     // This is a bit complicated since it tries to avoid repeated computation.
     var outputData = transformInternal(dataset)

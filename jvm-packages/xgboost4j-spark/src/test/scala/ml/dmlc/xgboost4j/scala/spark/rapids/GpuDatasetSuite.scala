@@ -14,33 +14,33 @@
  limitations under the License.
  */
 
-package ml.dmlc.xgboost4j.scala.spark.nvidia
+package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import ai.rapids.cudf.Cuda
-import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
 
-class NVDatasetSuite extends FunSuite with PerTest {
+class GpuDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
 
   override def sparkSessionBuilder: SparkSession.Builder = SparkSession.builder()
       .master("local[1]")
-      .appName("NVDatasetSuite")
+      .appName("GpuDatasetSuite")
       .config("spark.ui.enabled", false)
       .config("spark.driver.memory", "512m")
       .config("spark.task.cpus", 1)
 
   test("mapColumnarSingleBatchPerPartition") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(TRAIN_CSV_PATH)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(b.getNumColumns, b.getNumRows))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -50,10 +50,10 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("CSV parsing with compression") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/rank.train.csv.gz"))
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(b.getNumColumns, b.getNumRows))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -62,21 +62,21 @@ class NVDatasetSuite extends FunSuite with PerTest {
   }
 
   test("Unknown CSV parsing option") {
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     assertThrows[UnsupportedOperationException] {
       reader.option("something", "something").csv(TRAIN_CSV_PATH)
-        .mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+        .mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
           Iterator.single(b.getNumColumns))
     }
   }
 
   test("CSV parsing with header") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val path = getTestDataPath("/header.csv")
     val dataset = reader.schema(csvSchema).option("header", true).csv(path)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -86,11 +86,11 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("CSV parsing with custom delimiter") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val path = getTestDataPath("/custom-delim.csv")
     val dataset = reader.schema(csvSchema).option("sep", "|").csv(path)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -100,11 +100,11 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("CSV parsing with comments") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
     val path = getTestDataPath("/commented.csv")
     val dataset = reader.schema(csvSchema).option("comment", "#").csv(path)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -114,11 +114,11 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("CSV multifile partition") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d INT"
     val path = getTestDataPath("/multifile-norank-train-csv")
     val dataset = reader.schema(csvSchema).csv(path)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
     assertResult(1) { rdd.partitions.length }
     val counts = rdd.collect
@@ -129,9 +129,9 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("Parquet parsing") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(TRAIN_PARQUET_PATH)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -141,10 +141,10 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("Parquet subset parsing") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val specSchema = "a BOOLEAN, c DOUBLE, e INT"
     val dataset = reader.schema(specSchema).parquet(TRAIN_PARQUET_PATH)
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: NVColumnBatch) =>
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single((b.getNumColumns, b.getNumRows)))
     val counts = rdd.collect
     assertResult(1) { counts.length }
@@ -154,10 +154,10 @@ class NVDatasetSuite extends FunSuite with PerTest {
 
   test("buildRDD") {
     assume(Cuda.isEnvCompatibleForTesting)
-    val reader = new NVDataReader(ss)
+    val reader = new GpuDataReader(ss)
     val dataPath = getTestDataPath("/rank.train.parquet")
     val dataset = reader.parquet(dataPath)
-    val rdd = dataset.buildRDD.mapPartitions(_.flatMap(NVDataset.columnBatchToRows))
+    val rdd = dataset.buildRDD.mapPartitions(_.flatMap(GpuDataset.columnBatchToRows))
     val data = rdd.collect
 
     assertResult(149) { data.length }
@@ -195,7 +195,7 @@ class NVDatasetSuite extends FunSuite with PerTest {
       FilePartition(2, partFiles.slice(4, 6)),
       FilePartition(3, Seq(partFiles(6)))
     )
-    val oldset = new NVDataset(null, null, null, Some(oldPartitions))
+    val oldset = new GpuDataset(null, null, null, Some(oldPartitions))
     val newset = oldset.repartition(1)
     assertResult(1)(newset.partitions.length)
     assertResult(0)(newset.partitions(0).index)
@@ -222,7 +222,7 @@ class NVDatasetSuite extends FunSuite with PerTest {
       FilePartition(2, partFiles.slice(4, 6)),
       FilePartition(3, Seq(partFiles(6)))
     )
-    val oldset = new NVDataset(null, null, null, Some(oldPartitions))
+    val oldset = new GpuDataset(null, null, null, Some(oldPartitions))
     val newset = oldset.repartition(3)
     assertResult(3)(newset.partitions.length)
     for (i <- 0 until 3) {
@@ -242,8 +242,8 @@ class NVDatasetSuite extends FunSuite with PerTest {
       FilePartition(0, Seq(PartitionedFile(null, "/a/b/c", 0, 123))),
       FilePartition(1, Seq(PartitionedFile(null, "/a/b/d", 0, 456)))
     )
-    val nvds = new NVDataset(null, null, null, Some(oldPartitions))
-    assertThrows[UnsupportedOperationException] { nvds.repartition(3) }
+    val ds = new GpuDataset(null, null, null, Some(oldPartitions))
+    assertThrows[UnsupportedOperationException] { ds.repartition(3) }
   }
 
   private def getTestDataPath(resource: String): String = {

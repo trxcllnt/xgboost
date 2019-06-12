@@ -19,15 +19,15 @@ package ml.dmlc.xgboost4j.scala.spark
 import java.io.File
 
 import ai.rapids.cudf.{DType, Table}
-import ml.dmlc.xgboost4j.java.spark.nvidia.NVColumnBatch
-import ml.dmlc.xgboost4j.scala.spark.nvidia.{NVDataReader, NVDataset}
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
+import ml.dmlc.xgboost4j.scala.spark.rapids.{GpuDataReader, GpuDataset}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types.{
   BooleanType, ByteType, DataType, DateType, DoubleType,
   FloatType, IntegerType, LongType, ShortType, StructField, StructType, TimestampType
 }
 
-object NVDatasetData {
+object GpuDatasetData {
 
   private val classifierTrainDataPath = "/iris.data.csv"
   private val classifierTestDataPath = "/iris.test.data.csv"
@@ -62,33 +62,33 @@ object NVDatasetData {
     }
   }
 
-  def getClassifierTrainNVDataset(spark: SparkSession): NVDataset = {
-    val reader = new NVDataReader(spark)
+  def getClassifierTrainGpuDataset(spark: SparkSession): GpuDataset = {
+    val reader = new GpuDataReader(spark)
     reader.schema(classifierSchema).csv(getTestDataPath(classifierTrainDataPath))
   }
 
-  def getClassifierTestNVDataset(spark: SparkSession): (NVDataset, Long) = {
-    val reader = new NVDataReader(spark)
+  def getClassifierTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
+    val reader = new GpuDataReader(spark)
     val test = reader.schema(classifierSchema).csv(getTestDataPath(classifierTestDataPath))
 
-    val counts = test.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
-      Iterator.single(nvColumnBatch.getNumRows)
+    val counts = test.mapColumnarSingleBatchPerPartition(columnBatch => {
+      Iterator.single(columnBatch.getNumRows)
     }).collect()
 
     (test, counts(0))
   }
 
-  def getRegressionTrainNVDataset(spark: SparkSession): NVDataset = {
-    val reader = new NVDataReader(spark)
+  def getRegressionTrainGpuDataset(spark: SparkSession): GpuDataset = {
+    val reader = new GpuDataReader(spark)
     reader.schema(regressionSchema).csv(getTestDataPath(regressionTrainDataPath))
   }
 
-  def getRegressionTestNVDataset(spark: SparkSession): (NVDataset, Long) = {
-    val reader = new NVDataReader(spark)
+  def getRegressionTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
+    val reader = new GpuDataReader(spark)
     val test = reader.schema(regressionSchema).csv(getTestDataPath(regressionTestDataPath))
 
-    val counts = test.mapColumnarSingleBatchPerPartition(nvColumnBatch => {
-      Iterator.single(nvColumnBatch.getNumRows)
+    val counts = test.mapColumnarSingleBatchPerPartition(columnBatch => {
+      Iterator.single(columnBatch.getNumRows)
     }).collect()
 
     (test, counts(0))
@@ -99,16 +99,16 @@ object NVDatasetData {
     val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
     schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
     val table = Table.readCSV(csvSchemaBuilder.build(), new File(getTestDataPath(file)))
-    val nvColumnBatch = new NVColumnBatch(table, schema)
+    val columnBatch = new GpuColumnBatch(table, schema)
 
     var needTableClose = true
     try {
       val featuresColNames = schema.fieldNames.filter(_ != label)
       val featuresHandle = featuresColNames.map(colName => {
-          nvColumnBatch.getColumn(schema.fieldIndex(colName))
+          columnBatch.getColumn(schema.fieldIndex(colName))
       })
       val labelsHandle = Array(label).map(colName => {
-          nvColumnBatch.getColumn(schema.fieldIndex(colName))
+          columnBatch.getColumn(schema.fieldIndex(colName))
       })
       needTableClose = false
       (table, featuresHandle, labelsHandle)
