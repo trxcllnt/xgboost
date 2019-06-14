@@ -22,7 +22,7 @@
 #include <vector>
 
 #include <cuda_runtime.h>
-#include <cudf.h>
+#include <cudf/cudf.h>
 #include <rmm/rmm.h>
 
 #include "xgboost4j_spark_gpu.h"

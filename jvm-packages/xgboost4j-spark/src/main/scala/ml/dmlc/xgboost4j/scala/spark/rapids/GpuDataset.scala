@@ -19,7 +19,7 @@ package ml.dmlc.xgboost4j.scala.spark.rapids
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
-import ai.rapids.cudf.{CSVOptions, DType, ParquetOptions, Table}
+import ai.rapids.cudf.{CSVOptions, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.commons.logging.LogFactory
@@ -356,17 +356,22 @@ object GpuDataset {
     buildCsvOptions(options)
 
     (conf: Configuration, partFile: PartitionedFile) => {
-      val partFileData = readPartFileFully(conf, partFile)
-      val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
-      schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-      val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options), partFileData)
-      val numColumns = table.getNumberOfColumns
-      if (schema.length != numColumns) {
-        table.close()
-        throw new QueryExecutionException(s"Expected ${schema.length} columns " +
-          s"but only read ${table.getNumberOfColumns} from $partFile")
+      val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
+      try {
+        val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
+        schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
+        val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options),
+          dataBuffer, dataSize)
+        val numColumns = table.getNumberOfColumns
+        if (schema.length != numColumns) {
+          table.close()
+          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+              s"but only read ${table.getNumberOfColumns} from $partFile")
+        }
+        table
+      } finally {
+        dataBuffer.close()
       }
-      table
     }
   }
 
@@ -379,18 +384,22 @@ object GpuDataset {
     buildParquetOptions(options, schema)
 
     (conf: Configuration, partFile: PartitionedFile) => {
-      val partFileData = readPartFileFully(conf, partFile)
-      val parquetOptions = buildParquetOptions(options, schema)
-      val table = Table.readParquet(parquetOptions, partFileData)
-      val numColumns = table.getNumberOfColumns
-      // The parquet loader can load more columns than requested as it will
-      // always load a pandas index column if one is found.
-      if (schema.length > numColumns) {
-        table.close()
-        throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+      val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
+      try {
+        val parquetOptions = buildParquetOptions(options, schema)
+        val table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
+        val numColumns = table.getNumberOfColumns
+        // The parquet loader can load more columns than requested as it will
+        // always load a pandas index column if one is found.
+        if (schema.length > numColumns) {
+          table.close()
+          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
             s"but only read ${numColumns} from $partFile")
+        }
+        table
+      } finally {
+        dataBuffer.close()
       }
-      table
     }
   }
 
@@ -416,32 +425,60 @@ object GpuDataset {
     builder.build
   }
 
-  private def readPartFileFully(conf: Configuration, partFile: PartitionedFile): Array[Byte] = {
+  private def readPartFileFully(conf: Configuration,
+      partFile: PartitionedFile): (HostMemoryBuffer, Long) = {
     val rawPath = new Path(partFile.filePath)
     val fs = rawPath.getFileSystem(conf)
     val path = fs.makeQualified(rawPath)
     val fileSize = fs.getFileStatus(path).getLen
-    if (fileSize > Integer.MAX_VALUE) {
-      throw new UnsupportedOperationException(s"File partition at $path is" +
-        s" too big to buffer directly ($fileSize bytes)")
-    }
-
-    val baos = new ByteArrayOutputStream(fileSize.toInt)
-    val buffer = new Array[Byte](1024 * 16)
-    val codecFactory = new CompressionCodecFactory(conf)
-    val codec = codecFactory.getCodec(path)
-    val rawInput = fs.open(path)
-    val in = if (codec != null) codec.createInputStream(rawInput) else rawInput
+    var succeeded = false
+    var hmb = HostMemoryBuffer.allocate(fileSize)
+    var totalBytesRead: Long = 0L
     try {
-      var numBytes = in.read(buffer)
-      while (numBytes >= 0) {
-        baos.write(buffer, 0, numBytes)
-        numBytes = in.read(buffer)
+      val buffer = new Array[Byte](1024 * 16)
+      val codecFactory = new CompressionCodecFactory(conf)
+      val codec = codecFactory.getCodec(path)
+      val rawInput = fs.open(path)
+      val in = if (codec != null) codec.createInputStream(rawInput) else rawInput
+      try {
+        var numBytes = in.read(buffer)
+        while (numBytes >= 0) {
+          if (totalBytesRead + numBytes > hmb.getLength) {
+            hmb = growHostBuffer(hmb, totalBytesRead + numBytes)
+          }
+          hmb.setBytes(totalBytesRead, buffer, 0, numBytes)
+          totalBytesRead += numBytes
+          numBytes = in.read(buffer)
+        }
+      } finally {
+        in.close()
       }
-      baos.toByteArray
+      succeeded = true
     } finally {
-      in.close()
+      if (!succeeded) {
+        hmb.close()
+      }
     }
+    (hmb, totalBytesRead)
+  }
+
+  /**
+    * Grows a host buffer, returning a new buffer and closing the original
+    * after copying the data into the new buffer.
+    * @param original the original host memory buffer
+    */
+  private def growHostBuffer(original: HostMemoryBuffer, needed: Long): HostMemoryBuffer = {
+    val newSize = Math.max(original.getLength * 2, needed)
+    val result = HostMemoryBuffer.allocate(newSize)
+    try {
+      result.copyFromHostBuffer(0, original, 0, original.getLength)
+      original.close()
+    } catch {
+      case e: Throwable =>
+        result.close()
+        throw e
+    }
+    result
   }
 
   private def toDType(dataType: DataType): DType = {
