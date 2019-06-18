@@ -295,7 +295,8 @@ object GpuDataset {
       private val numRows = batch.getNumRows
       private val schema = batch.getSchema
       private val converter = new RowConverter(schema)
-      private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(schema.length) + schema.length * 8
+      private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(batch.getNumColumns) +
+        batch.getNumColumns * 8
       private var buffer: Long = _
       private var nextRow = 0
       private val row = new UnsafeRow(schema.length)
