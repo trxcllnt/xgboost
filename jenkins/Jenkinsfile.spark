@@ -30,12 +30,14 @@ pipeline {
         timestamps()
         timeout(time: 120, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
+        gitLabConnection('GitLab Master')
     }
 
     // Build stages
     stages {
         stage('Jenkins: Get sources') {
             steps {
+                updateGitlabCommitStatus(name: 'Jenkins CI', state: 'running')
                 script {
                     utils = load('tests/ci_build/jenkins_tools_spark.Groovy')
                     utils.checkoutSrcs()
@@ -59,6 +61,14 @@ pipeline {
     }
     post {
         always {
+            script {
+                def status = "failed"
+                if (currentBuild.currentResult == "SUCCESS")
+                    status = "success"
+                updateGitlabCommitStatus(name: 'Jenkins CI', state: status)
+            }
+        }
+        cleanup {
             sh "chown -R \$(id -u):\$(id -g) \${WORKSPACE}"
         }
     }
