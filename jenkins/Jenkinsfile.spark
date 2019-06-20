@@ -68,9 +68,6 @@ pipeline {
                 updateGitlabCommitStatus(name: 'Jenkins CI', state: status)
             }
         }
-        cleanup {
-            sh "chown -R \$(id -u):\$(id -g) \${WORKSPACE}"
-        }
     }
 }
 
