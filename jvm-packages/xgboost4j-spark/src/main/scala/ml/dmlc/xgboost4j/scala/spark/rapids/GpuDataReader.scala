@@ -127,7 +127,7 @@ class GpuDataReader(sparkSession: SparkSession) {
 
   protected def createDataset(relation: HadoopFsRelation, sourceType: String,
       sourceOptions: Map[String, String]): GpuDataset = {
-    new GpuDataset(relation, sourceType, sourceOptions)
+    new GpuDataset(relation, sourceType, sourceOptions, false)
   }
 
   /**
