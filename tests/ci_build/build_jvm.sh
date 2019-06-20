@@ -10,6 +10,7 @@ cleanup() {
 trap cleanup EXIT
 
 # work directory is the root of XGBoost repo
+rm -fr build
 pushd jvm-packages
 mvn clean
 mvn package
