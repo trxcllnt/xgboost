@@ -61,6 +61,12 @@
     </modules>
     <profiles>
         <profile>
+            <id>cuda9.2</id>
+            <properties>
+                <cudf.classifier></cudf.classifier>
+            </properties>
+        </profile>
+        <profile>
             <id>release</id>
             <build>
                 <plugins>
