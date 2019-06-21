@@ -15,6 +15,22 @@ extern "C" {
 JNIEXPORT jlong JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostSparkJNI_buildUnsafeRows
   (JNIEnv *, jclass, jlongArray);
 
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostSparkJNI
+ * Method:    getGpuDevice
+ * Signature: ()I
+ */
+JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostSparkJNI_getGpuDevice
+  (JNIEnv *, jclass);
+
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostSparkJNI
+ * Method:    allocateGpuDevice
+ * Signature: ()I
+ */
+JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostSparkJNI_allocateGpuDevice
+  (JNIEnv *, jclass);
+
 #ifdef __cplusplus
 }
 #endif

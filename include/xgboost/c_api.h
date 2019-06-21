@@ -112,10 +112,11 @@ XGB_DLL int XGBRegisterLogCallback(void (*callback)(const char*));
  * \param cols array of CUDF columns
  * \param n_cols number of CUDF columns
  * \param[out] out handle for the DMatrix built
+ * \param gpu_id the gpu id to use
  * \return 0 when success, -1 when failure happens
  */
 XGB_DLL int XGDMatrixCreateFromCUDF
-(gdf_column **cols, size_t n_cols, DMatrixHandle *out);
+(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id);
 #endif
 
 /*!
@@ -284,13 +285,15 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
  * \param field field name, can be label, weight
  * \param array pointer to float vector
  * \param len length of array
+ * \param gpu_id id of gpu to use
  * \return 0 when success, -1 when failure happens
  */
 
 XGB_DLL int XGDMatrixSetCUDFInfo(DMatrixHandle handle,
                                 const char *field,
                                 gdf_column** gdf,
-                                size_t n_cols);
+                                size_t n_cols,
+                                int gpu_id);
 #endif
 
 /*!

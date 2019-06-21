@@ -66,8 +66,8 @@ class XGBoostJNI {
                                                         float missing, long[] out);
 
   // CUDF support: Suppose gdf_columns are passed as array of native handles
-  public final static native int XGDMatrixCreateFromCUDF(long[] cols, long[] out);
-  public final static native int XGDMatrixSetCUDFInfo(long handle, String field, long[] cols);
+  public final static native int XGDMatrixCreateFromCUDF(long[] cols, long[] out, int gpu_id);
+  public final static native int XGDMatrixSetCUDFInfo(long handle, String field, long[] cols, int gpu_id);
 
   public final static native int XGDMatrixSliceDMatrix(long handle, int[] idxset, long[] out);
 

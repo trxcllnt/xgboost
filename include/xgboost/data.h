@@ -133,8 +133,9 @@ class MetaInfo {
    * \param key The key of the information.
    * \param cols The CUDF columns used to set the info.
    * \param n_cols The number of CUDF columns.
+   * \param gpu_id id of gpu to use.
    */
-  void SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols);
+  void SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols, int gpu_id);
 #endif
 
  private:

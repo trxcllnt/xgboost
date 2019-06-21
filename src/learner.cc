@@ -203,6 +203,13 @@ class LearnerImpl : public Learner {
     // add to configurations
     tparam_.InitAllowUnknown(args);
     ConsoleLogger::Configure(args.cbegin(), args.cend());
+    // we have already allocated the GPU here we just neeed to get it and set gpu_id
+    int id = AllVisibleImpl::GetGPUDeviceId();
+    // non gpu impl returns -1
+    if (id > -1) {
+      LOG(DEBUG) << "Configure - setting gpu id to: " << id;
+      tparam_.gpu_id = id;
+    }
     monitor_.Init("Learner");
     cfg_.clear();
 
@@ -295,6 +302,16 @@ class LearnerImpl : public Learner {
     }
     // use the peekable reader.
     fi = &fp;
+
+    // This is needed when doing just a transform, its already allocated
+    // just need to set the gpu_id
+    int id = AllVisibleImpl::GetGPUDeviceId();
+    // non gpu impl returns -1
+    if (id > -1) {
+      LOG(DEBUG) << "Load setting gpu id to: " << id;
+      tparam_.gpu_id = id;
+    }
+
     // read parameter
     CHECK_EQ(fi->Read(&mparam_, sizeof(mparam_)), sizeof(mparam_))
         << "BoostLearner: wrong model format";
@@ -331,8 +348,12 @@ class LearnerImpl : public Learner {
           const std::string saved_param = kv.first.substr(prefix.length());
           bool is_gpu_predictor = saved_param == "predictor" && kv.second == "gpu_predictor";
 #ifdef XGBOOST_USE_CUDA
-          if (saved_param == "predictor" || saved_param == "n_gpus"
-              || saved_param == "gpu_id") {
+          // TODO - do we want to recover gpu_id? I'm pretty sure we don't if we load this 
+          // separate from saving it
+          if (saved_param == "gpu_id") {
+            LOG(WARNING) << "not recovering gpu_id: " << kv.second;
+          }
+          if (saved_param == "predictor" || saved_param == "n_gpus") {
             cfg_[saved_param] = kv.second;
             LOG(INFO)
               << "Parameter '" << saved_param << "' has been recovered from "

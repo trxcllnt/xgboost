@@ -23,7 +23,7 @@ __global__ void unpack_cudf_column_k
   data[n_cols * i] = ConvertDataElement(col.data, i, col.dtype);
 }
 
-void MetaInfo::SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols) {
+void MetaInfo::SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols, int gpu_id) {
   CHECK_GT(n_cols, 0);
   size_t n_rows = cols[0]->size;
   for (size_t i = 0; i < n_cols; ++i) {
@@ -41,10 +41,18 @@ void MetaInfo::SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols) {
     return;
   }
   // TODO(canonizer): use the same devices as elsewhere in xgboost
-  GPUSet devices = GPUSet::Range(0, 1);
+  int device_id = 0;
+  GPUSet devices;
+  if (gpu_id > 0) {
+    device_id = gpu_id;
+    devices = GPUSet::All(device_id, 1);
+  } else {
+    devices = GPUSet::Range(device_id, 1);
+  }
+
   field->Reshard(GPUDistribution::Granular(devices, n_cols));
   field->Resize(n_cols * n_rows);
-  bst_float* data = field->DevicePointer(0);
+  bst_float* data = field->DevicePointer(device_id);
   for (size_t i = 0; i < n_cols; ++i) {
     int block = 256;
     unpack_cudf_column_k<<<dh::DivRoundUp(n_rows, block), block>>>

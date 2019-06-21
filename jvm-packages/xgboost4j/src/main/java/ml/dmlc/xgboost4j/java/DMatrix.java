@@ -26,6 +26,7 @@ import ml.dmlc.xgboost4j.LabeledPoint;
  */
 public class DMatrix {
   protected long handle = 0;
+  private int gpu_id = 0;
 
   /**
    * sparse matrix type (CSR or CSC)
@@ -156,12 +157,24 @@ public class DMatrix {
    * @param gdf_cols The native handles of GDF columns
    * @throws XGBoostError native error
    */
-  public DMatrix(long[] gdf_cols) throws XGBoostError {
+  public DMatrix(long[] gdf_cols) throws XGBoostError  {
+    this(gdf_cols, 0);
+  }
+
+  /**
+   * Create DMatrix from cuDF.
+   *
+   * @param gdf_cols The native handles of GDF columns
+   * @param gpu_id   The gpu id to use
+   * @throws XGBoostError native error
+   */
+  public DMatrix(long[] gdf_cols, int gpu_id) throws XGBoostError {
     if (gdf_cols == null) {
       throw new NullPointerException("gdf_cols: null");
     }
     long[] out = new long[1];
-    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out));
+    this.gpu_id = gpu_id;
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out, gpu_id));
     handle = out[0];
   }
 
@@ -173,7 +186,7 @@ public class DMatrix {
    * @throws XGBoostError native error
    */
   public void setCUDFInfo(String field, long[] cols) throws XGBoostError {
-    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixSetCUDFInfo(handle, field, cols));
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixSetCUDFInfo(handle, field, cols, gpu_id));
   }
   // END CUDF Support
 

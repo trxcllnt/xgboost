@@ -18,12 +18,13 @@ package ml.dmlc.xgboost4j.scala.spark
 
 import scala.collection.{AbstractIterator, Iterator, mutable}
 import scala.collection.JavaConverters._
-import ml.dmlc.xgboost4j.java.{Rabit, XGBoost => JXGBoost}
+import ml.dmlc.xgboost4j.java.{Rabit, XGBoost => JXGBoost, XGBoostSparkJNI}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import ml.dmlc.xgboost4j.scala.spark.params.{DefaultXGBoostParamsReader, _}
 import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
+import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.fs.Path
 import org.apache.spark.TaskContext
 import org.apache.spark.ml.linalg.Vector
@@ -231,6 +232,8 @@ class XGBoostRegressionModel private[ml] (
 
   import XGBoostRegressionModel._
 
+  private val logger = LogFactory.getLog("XGBoostRegressionModel")
+
   // only called in copy()
   def this(uid: String) = this(uid, null)
 
@@ -296,9 +299,16 @@ class XGBoostRegressionModel private[ml] (
 
     val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
       val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
-
+      // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
+      // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
+      // it doesn't hurt to call allocateGpuDevice so just always do it.
+      var gpuId = XGBoostSparkJNI.allocateGpuDevice()
+      logger.info("XGboost regressor transform GPUDataSet using device: " + gpuId)
+      if (gpuId == 0) {
+        gpuId = -1;
+      }
       val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
-      val dm = new DMatrix(gdfColsHandles(0))
+      val dm = new DMatrix(gdfColsHandles(0), gpuId)
 
       Rabit.init(rabitEnv.asJava)
       try {
