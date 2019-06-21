@@ -33,6 +33,14 @@ pipeline {
         gitLabConnection('GitLab Master')
     }
 
+    parameters {
+        string(name: 'REF', defaultValue: 'nv-cudf-interop', description: 'Commit to build')
+    }
+
+    triggers {
+        cron('H 0 * * *')
+    }
+
     // Build stages
     stages {
         stage('Jenkins: Get sources') {
