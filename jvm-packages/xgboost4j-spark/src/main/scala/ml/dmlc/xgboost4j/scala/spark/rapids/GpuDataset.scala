@@ -16,16 +16,16 @@
 
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
-import java.io.ByteArrayOutputStream
 import java.util.Locale
 
-import ai.rapids.cudf.{CSVOptions, DType, HostMemoryBuffer, ParquetOptions, Table}
+import ai.rapids.cudf.{ColumnVector, CSVOptions, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
 import org.apache.hadoop.io.compress.CompressionCodecFactory
+
 import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
@@ -35,7 +35,6 @@ import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelati
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
-
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
@@ -43,12 +42,19 @@ import scala.reflect.ClassTag
 class GpuDataset(fsRelation: HadoopFsRelation,
     sourceType: String,
     sourceOptions: Map[String, String],
+    castAllToFloats: Boolean,
     specifiedPartitions: Option[Seq[FilePartition]] = None) {
 
   private val logger = LogFactory.getLog(classOf[GpuDataset])
 
   /** Returns the schema of the data. */
-  def schema: StructType = fsRelation.schema
+  def schema: StructType = {
+    if (castAllToFloats) {
+      GpuDataset.numericAsFloats(fsRelation.schema)
+    } else {
+      fsRelation.schema
+    }
+  }
 
   /**
     *  Return an [[RDD]] of column batches.
@@ -57,11 +63,12 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     */
   private[xgboost4j] def buildRDD: RDD[GpuColumnBatch] = {
     val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
-      schema, sourceOptions)
+      fsRelation.schema, sourceOptions, castAllToFloats)
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
     val serializableConf = new SerializableWritable[Configuration](hadoopConf)
     val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
-    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader, partitions, schema)
+    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader,
+      partitions, schema)
   }
 
   /**
@@ -76,7 +83,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
   /** Return a new GpuDataset that has exactly numPartitions partitions. */
   def repartition(numPartitions: Int): GpuDataset = {
     if (numPartitions == partitions.length) {
-      return new GpuDataset(fsRelation, sourceType, sourceOptions, Some(partitions))
+      return new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
+        Some(partitions))
     }
 
     // build a list of all input files sorted from largest to smallest
@@ -98,7 +106,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     }
 
     val newPartitions = buckets.zipWithIndex.map{case (b, i) => b.toFilePartition(i)}
-    new GpuDataset(fsRelation, sourceType, sourceOptions, Some(newPartitions))
+    new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats, Some(newPartitions))
   }
 
   /**
@@ -341,14 +349,23 @@ object GpuDataset {
     iter
   }
 
+  private def numericAsFloats(schema: StructType): StructType = {
+    StructType(schema.fields.map {
+      case StructField(name, nt: NumericType, nullable, metadata) =>
+        StructField(name, FloatType, nullable, metadata)
+      case other => other
+    })
+  }
+
   private def getPartFileReader(
         sparkSession: SparkSession,
         sourceType: String,
         schema: StructType,
-        options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
+        options: Map[String, String],
+        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
     sourceType match {
-      case "csv" => getCsvPartFileReader(sparkSession, schema, options)
-      case "parquet" => getParquetPartFileReader(sparkSession, schema, options)
+      case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
+      case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
       case _ => throw new UnsupportedOperationException(
         s"Unsupported source type: $sourceType")
     }
@@ -356,12 +373,17 @@ object GpuDataset {
 
   private def getCsvPartFileReader(
       sparkSession: SparkSession,
-      schema: StructType,
-      options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
+      inputSchema: StructType,
+      options: Map[String, String],
+      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
     buildCsvOptions(options)
-
+    val schema = if (castAllToFloats) {
+      numericAsFloats(inputSchema)
+    } else {
+      inputSchema
+    }
     (conf: Configuration, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
       try {
@@ -385,7 +407,8 @@ object GpuDataset {
   private def getParquetPartFileReader(
       sparkSession: SparkSession,
       schema: StructType,
-      options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
+      options: Map[String, String],
+      castToFloat: Boolean): (Configuration, PartitionedFile) => Table = {
     // Try to build Parquet options on the driver here to validate and fail fast.
     // The other Parquet option build below will occur on the executors.
     buildParquetOptions(options, schema)
@@ -394,7 +417,7 @@ object GpuDataset {
       val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
       try {
         val parquetOptions = buildParquetOptions(options, schema)
-        val table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
+        var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
         val numColumns = table.getNumberOfColumns
         // The parquet loader can load more columns than requested as it will
         // always load a pandas index column if one is found.
@@ -402,6 +425,23 @@ object GpuDataset {
           table.close()
           throw new QueryExecutionException(s"Expected ${schema.length} columns " +
             s"but only read ${numColumns} from $partFile")
+        }
+        if (castToFloat) {
+          val columns = new Array[ColumnVector](numColumns)
+          try {
+            for (i <- 0 until numColumns) {
+              val c = table.getColumn(i)
+              columns(i) = schema.fields(i).dataType match {
+                case nt: NumericType => c.asFloats()
+                case _ => c.incRefCount()
+              }
+            }
+            var tmp = table
+            table = new Table(columns: _*)
+            tmp.close()
+          } finally {
+            columns.foreach(v => if (v != null) v.close())
+          }
         }
         table
       } finally {

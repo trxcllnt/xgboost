@@ -156,7 +156,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val dataPath = getTestDataPath("/rank.train.parquet")
-    val dataset = reader.parquet(dataPath)
+    val dataset = reader.option("asFloats", "false").parquet(dataPath)
     val rdd = dataset.buildRDD.mapPartitions(_.flatMap(GpuDataset.columnBatchToRows))
     val data = rdd.collect
 
@@ -195,7 +195,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
       FilePartition(2, partFiles.slice(4, 6)),
       FilePartition(3, Seq(partFiles(6)))
     )
-    val oldset = new GpuDataset(null, null, null, Some(oldPartitions))
+    val oldset = new GpuDataset(null, null, null, false, Some(oldPartitions))
     val newset = oldset.repartition(1)
     assertResult(1)(newset.partitions.length)
     assertResult(0)(newset.partitions(0).index)
@@ -222,7 +222,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
       FilePartition(2, partFiles.slice(4, 6)),
       FilePartition(3, Seq(partFiles(6)))
     )
-    val oldset = new GpuDataset(null, null, null, Some(oldPartitions))
+    val oldset = new GpuDataset(null, null, null, false, Some(oldPartitions))
     val newset = oldset.repartition(3)
     assertResult(3)(newset.partitions.length)
     for (i <- 0 until 3) {
@@ -242,7 +242,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
       FilePartition(0, Seq(PartitionedFile(null, "/a/b/c", 0, 123))),
       FilePartition(1, Seq(PartitionedFile(null, "/a/b/d", 0, 456)))
     )
-    val ds = new GpuDataset(null, null, null, Some(oldPartitions))
+    val ds = new GpuDataset(null, null, null, false, Some(oldPartitions))
     assertThrows[UnsupportedOperationException] { ds.repartition(3) }
   }
 
