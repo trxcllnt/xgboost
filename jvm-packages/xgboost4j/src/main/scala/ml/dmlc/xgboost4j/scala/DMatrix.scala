@@ -21,6 +21,7 @@ import ml.dmlc.xgboost4j.LabeledPoint
 import ml.dmlc.xgboost4j.java.{DMatrix => JDMatrix, DataBatch, XGBoostError}
 
 class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
+
   /**
    * init DMatrix from file (svmlight format)
    *
@@ -100,11 +101,22 @@ class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
   /**
    * create DMatrix from CUDF
    * @param data native handles of GDF columns
+   * @param gpuId gpu id to use
+   * @throws ml.dmlc.xgboost4j.java.XGBoostError
+   */
+  @throws(classOf[XGBoostError])
+  def this(data: Array[Long], gpuId: Int) {
+    this(new JDMatrix(data, gpuId))
+  }
+
+  /**
+   * create DMatrix from CUDF
+   * @param data native handles of GDF columns
    * @throws ml.dmlc.xgboost4j.java.XGBoostError
    */
   @throws(classOf[XGBoostError])
   def this(data: Array[Long]) {
-    this(new JDMatrix(data))
+    this(data, 0)
   }
 
   /**

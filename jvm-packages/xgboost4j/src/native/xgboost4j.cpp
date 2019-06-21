@@ -273,10 +273,10 @@ extern void XGBAPISetLastError(const char* msg);
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixCreateFromCUDF
- * Signature: ([J[J)I
+ * Signature: ([J[JI)I
  */
 JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFromCUDF
-  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout) {
+  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout, jint gpu_id) {
 #ifdef XGBOOST_USE_CUDF
   DMatrixHandle dhandle;
   jsize num_cols = jenv->GetArrayLength(jcols);
@@ -286,7 +286,7 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
     XGBAPISetLastError("Null columns");
     return -1;
   }
-  int ret = XGDMatrixCreateFromCUDF((gdf_column**)cols, (size_t)num_cols, &dhandle);
+  int ret = XGDMatrixCreateFromCUDF((gdf_column**)cols, (size_t)num_cols, &dhandle, gpu_id);
   if (cols != nullptr) {
     jenv->ReleaseLongArrayElements(jcols, cols, 0);
   }
@@ -302,10 +302,10 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixSetCUDFInfo
- * Signature: (JLjava/lang/String;[J)I
+ * Signature: (JLjava/lang/String;[JI)I
  */
 JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixSetCUDFInfo
-  (JNIEnv *jenv, jclass jcls, jlong jhandle, jstring jfield, jlongArray jcols) {
+  (JNIEnv *jenv, jclass jcls, jlong jhandle, jstring jfield, jlongArray jcols, jint gpu_id) {
 #ifdef XGBOOST_USE_CUDF
   jsize num_cols = jenv->GetArrayLength(jcols);
   jlong* cols = jenv->GetLongArrayElements(jcols, nullptr);
@@ -316,7 +316,7 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixSetCUDFIn
     XGBAPISetLastError(msg.c_str());
     return -1;
   }
-  int ret = XGDMatrixSetCUDFInfo((DMatrixHandle)jhandle, field, (gdf_column**)cols, (size_t)num_cols);
+  int ret = XGDMatrixSetCUDFInfo((DMatrixHandle)jhandle, field, (gdf_column**)cols, (size_t)num_cols, gpu_id);
   if (field != nullptr) {
     jenv->ReleaseStringUTFChars(jfield, field);
   }

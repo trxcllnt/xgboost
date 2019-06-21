@@ -21,7 +21,7 @@ import java.nio.file.Files
 
 import scala.collection.{AbstractIterator, mutable}
 import scala.util.Random
-import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, RabitTracker => PyRabitTracker}
+import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, RabitTracker => PyRabitTracker, XGBoostSparkJNI}
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
 import ml.dmlc.xgboost4j.scala.spark.params.BoosterParams
 import ml.dmlc.xgboost4j.scala.spark.params.LearningTaskParams
@@ -528,17 +528,36 @@ object XGBoost extends Serializable {
       val colIndicesForTrain = dataMap(trainName).colsIndices
       dataMap(trainName).rawDataset.mapColumnarSingleBatchPerPartition {
         columnBatch =>
+          // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
+          // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
+          // it doesn't hurt to call allocateGpuDevice so just always do it.
+          val gpuId = XGBoostSparkJNI.allocateGpuDevice()
+          logger.info("XGboost trainForGpuDataset using device: " + gpuId)
+          var paramsWithGpuId = updatedParams
+          if (gpuId != 0) {
+            paramsWithGpuId = updatedParams + ("gpu_id" -> gpuId.toString())
+          }
           val gdfColsHandles = colIndicesForTrain.map(_.map(columnBatch.getColumn))
-          val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), gdfColsHandles)
-          buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
+          val watches = Watches.buildWatches(getCacheDirName(useExternalMemory),
+            gdfColsHandles, gpuId)
+          buildDistributedBooster(watches, paramsWithGpuId, rabitEnv, checkpointRound,
             obj, eval, prevBooster)
       }.cache()
     } else {
       // Train with evaluation sets
       coPartitionForGpuDataset(dataMap, sc, nWorkers).mapPartitions {
         nameAndColHandles =>
-          val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), nameAndColHandles)
-          buildDistributedBooster(watches, updatedParams, rabitEnv, checkpointRound,
+          // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
+          // and pass that as the gpu_id
+          val gpuId = XGBoostSparkJNI.allocateGpuDevice()
+          logger.info("XGboost train GPUDataSet copartition using device: " + gpuId)
+          var paramsWithGpuId = updatedParams
+          if (gpuId != 0) {
+            paramsWithGpuId = updatedParams + ("gpu_id" -> gpuId.toString())
+          }
+          val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), nameAndColHandles,
+            gpuId)
+          buildDistributedBooster(watches, paramsWithGpuId, rabitEnv, checkpointRound,
             obj, eval, prevBooster)
       }.cache()
     }
@@ -826,11 +845,11 @@ private object Watches {
     }
   }
 
-  private def newDMatrixFromGdfColumns(gdfColHandles: Seq[Array[Long]]):
+  private def newDMatrixFromGdfColumns(gdfColHandles: Seq[Array[Long]], gpuId: Int):
       DMatrix = {
     // Suppose gdf columns are given in this order: features, label, weight,
     // the same with that in 'checkAndGetGDFColumnIndices'.
-    val newDMatrix = new DMatrix(gdfColHandles(0))
+    val newDMatrix = new DMatrix(gdfColHandles(0), gpuId)
     newDMatrix.setCUDFInfo("label", gdfColHandles(1))
     if (gdfColHandles(2).nonEmpty) {
       newDMatrix.setCUDFInfo("weight", gdfColHandles(2))
@@ -838,18 +857,19 @@ private object Watches {
     newDMatrix
   }
 
-  def buildWatches(cachedDirName: Option[String], gdfColHandles: Seq[Array[Long]]):
+  def buildWatches(cachedDirName: Option[String], gdfColHandles: Seq[Array[Long]], gpuId: Int):
       Watches = {
-    val trainMatrix = newDMatrixFromGdfColumns(gdfColHandles)
+    val trainMatrix = newDMatrixFromGdfColumns(gdfColHandles, gpuId)
     new Watches(Array(trainMatrix), Array("train"), cachedDirName)
   }
 
   def buildWatches(
       cachedDirName: Option[String],
-      nameAndGdfColumns: Iterator[(String, Seq[Array[Long]])]):
+      nameAndGdfColumns: Iterator[(String, Seq[Array[Long]])],
+      gpuId: Int):
       Watches = {
     val dms = nameAndGdfColumns.map {
-      case (name, gdfColumns) => (name, newDMatrixFromGdfColumns(gdfColumns))
+      case (name, gdfColumns) => (name, newDMatrixFromGdfColumns(gdfColumns, gpuId))
     }.toArray
     new Watches(dms.map(_._2), dms.map(_._1), cachedDirName)
   }

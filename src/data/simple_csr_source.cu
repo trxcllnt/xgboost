@@ -139,7 +139,7 @@ __global__ void determine_valid_rec_count_k
     ++offset[tid];
 }
 
-void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols) {
+void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols, int gpu_id) {
   CHECK_GT(n_cols, 0);
   size_t n_rows = cols[0]->size;
   info.num_col_ = n_cols;
@@ -151,7 +151,15 @@ void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols) {
   }
   info.num_nonzero_ = n_entries;
   // TODO(canonizer): use the same devices as by the rest of xgboost
-  GPUSet devices = GPUSet::Range(0, 1);
+  int device_id = 0;
+  GPUSet devices;
+  if (gpu_id > 0) {
+    device_id = gpu_id;
+    devices = GPUSet::All(device_id, 1);
+  } else {
+    devices = GPUSet::Range(device_id, 1);
+  }
+
   page_.offset.Reshard(GPUDistribution::Overlap(devices, 1));
   // TODO(canonizer): use the real row offsets for the multi-GPU case
   std::vector<size_t> device_offsets{0, n_entries};
@@ -159,8 +167,8 @@ void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols) {
   page_.offset.Resize(n_rows + 1);
   page_.data.Resize(n_entries);
   CsrCudf csr;
-  csr.data = page_.data.DevicePointer(0);
-  csr.offsets = page_.offset.DevicePointer(0);
+  csr.data = page_.data.DevicePointer(device_id);
+  csr.offsets = page_.offset.DevicePointer(device_id);
   csr.n_nz = 0;
   csr.n_rows = n_rows;
   csr.n_cols = n_cols;

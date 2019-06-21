@@ -280,6 +280,12 @@ object GpuDataset {
 
   private def maxDoubleMapper(columnIndex: Int): GpuColumnBatch => Iterator[Double] =
     (b: GpuColumnBatch) => {
+      // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
+      // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
+      // it doesn't hurt to call allocateGpuDevice so just always do it.
+      var gpuId = XGBoostSparkJNI.allocateGpuDevice()
+      logger.debug("XGboost maxDoubleMapper get device: " + gpuId)
+
       val column = b.getColumnVector(columnIndex)
       val scalar = column.max()
       if (scalar.isValid) {

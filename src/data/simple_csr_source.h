@@ -47,7 +47,7 @@ class SimpleCSRSource : public DataSource {
     \param cols CUDA columns
     \param n_cols number of CUDA columns
    */
-  void InitFromCUDF(gdf_column** cols, size_t n_cols);
+  void InitFromCUDF(gdf_column** cols, size_t n_cols, int gpu_id);
 #endif
   
   /*!

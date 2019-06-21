@@ -139,6 +139,8 @@ class Range {
 
 struct AllVisibleImpl {
   static int AllVisible();
+  static int GetGPUDeviceId();
+  static int AllocateGPUDeviceId();
 };
 /* \brief set of devices across which HostDeviceVector can be distributed.
  *

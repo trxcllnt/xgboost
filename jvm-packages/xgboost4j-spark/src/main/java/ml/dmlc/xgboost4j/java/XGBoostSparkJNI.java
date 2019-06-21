@@ -43,4 +43,8 @@ public class XGBoostSparkJNI {
    *       returned by this function (e.g.: using Platform.freeMemory).
    */
   public static native long buildUnsafeRows(long[] nativeColumnPtrs);
+
+  public static native int getGpuDevice();
+
+  public static native int allocateGpuDevice();
 }
