@@ -156,7 +156,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val dataPath = getTestDataPath("/rank.train.parquet")
-    val dataset = reader.parquet(dataPath)
+    val dataset = reader.option("asFloats", "false").parquet(dataPath)
     val rdd = dataset.buildRDD.mapPartitions(_.flatMap(GpuDataset.columnBatchToRows))
     val data = rdd.collect
 

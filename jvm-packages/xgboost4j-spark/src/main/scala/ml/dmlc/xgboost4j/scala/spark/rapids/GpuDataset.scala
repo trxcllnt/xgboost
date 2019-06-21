@@ -80,15 +80,6 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     buildRDD.mapPartitions(GpuDataset.getMapper(func))
   }
 
-  /**
-   * Return a new GpuDataset that has all of the numerical columns cast to floats. XGBoost
-   * internally will use floats for training and inference, and doing it early on reduces the
-   * GPU memory load, as spark really likes doubles and longs by default.
-   */
-  def asFloats(): GpuDataset = {
-    return new GpuDataset(fsRelation, sourceType, sourceOptions, true, specifiedPartitions)
-  }
-
   /** Return a new GpuDataset that has exactly numPartitions partitions. */
   def repartition(numPartitions: Int): GpuDataset = {
     if (numPartitions == partitions.length) {
@@ -366,10 +357,9 @@ object GpuDataset {
         schema: StructType,
         options: Map[String, String],
         castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
-    (sourceType, castAllToFloats) match {
-      case ("csv", false) => getCsvPartFileReader(sparkSession, schema, options)
-      case ("csv", true) => getCsvPartFileReader(sparkSession, numericAsFloats(schema), options)
-      case ("parquet", c2f) => getParquetPartFileReader(sparkSession, schema, options, c2f)
+    sourceType match {
+      case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
+      case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
       case _ => throw new UnsupportedOperationException(
         s"Unsupported source type: $sourceType")
     }
@@ -377,12 +367,17 @@ object GpuDataset {
 
   private def getCsvPartFileReader(
       sparkSession: SparkSession,
-      schema: StructType,
-      options: Map[String, String]): (Configuration, PartitionedFile) => Table = {
+      inputSchema: StructType,
+      options: Map[String, String],
+      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
     buildCsvOptions(options)
-
+    val schema = if (castAllToFloats) {
+      numericAsFloats(inputSchema)
+    } else {
+      inputSchema
+    }
     (conf: Configuration, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
       try {
