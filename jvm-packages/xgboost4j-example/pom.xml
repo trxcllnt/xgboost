@@ -27,6 +27,7 @@
             <groupId>ai.rapids</groupId>
             <artifactId>xgboost4j-spark</artifactId>
             <version>${self.version}</version>
+            <classifier>${cudf.classifier}</classifier>
         </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
