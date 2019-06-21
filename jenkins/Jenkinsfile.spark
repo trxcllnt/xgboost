@@ -84,7 +84,7 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
     def distDir = "dist/${buildName}"
     def dockerArgs = ""
     if (conf["withGpu"]) {
-        dockerArgs = "--build-arg CUDA_VERSION=" + conf["cudaVersion"]
+        dockerArgs = "--build-arg CUDA_VER=" + conf["cudaVersion"]
     }
     def test_suite = conf["withSpark"] ? "sparkgpu" : (conf["withGpu"] ? (conf["multiGpu"] ? "mgpu" : "gpu") : "cpu")
     // Build node - this is returned result
