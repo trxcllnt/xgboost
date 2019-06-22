@@ -104,7 +104,7 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
             """.stripMargin('|')
             // Invoke command inside docker
             sh """
-            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm.sh
+            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm_deploy.sh
             """
         }
     }
