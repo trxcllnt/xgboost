@@ -13,5 +13,12 @@ trap cleanup EXIT
 rm -fr build
 pushd jvm-packages
 mvn clean
-mvn deploy
+if [ $1 == "10.0" ]; then
+    echo "mvn deploy for cuda10.0"
+    mvn package deploy
+else
+    echo "mvn deploy for cuda9.2"
+    mvn -Pcuda9.2 package
+    mvn -Pcuda9.2 deploy -pl xgboost4j-spark
+fi
 popd

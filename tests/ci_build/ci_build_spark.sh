@@ -86,7 +86,7 @@ WORKSPACE="${WORKSPACE:-${SCRIPT_DIR}/../../}"
 DOCKER_IMG_NAME="xgb-ci.${CONTAINER_TYPE}"
 
 # Append cuda version if available
-CUDA_VERSION=$(echo "${CI_DOCKER_BUILD_ARG}" | grep CUDA_VERSION | egrep -o '[0-9]*\.[0-9]*')
+CUDA_VERSION=$(echo "${CI_DOCKER_BUILD_ARG}" | grep CUDA_VER | egrep -o '[0-9]*\.[0-9]*')
 DOCKER_IMG_NAME=$DOCKER_IMG_NAME$CUDA_VERSION 
 
 # Under Jenkins matrix build, the build tag may contain characters such as

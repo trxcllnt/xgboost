@@ -15,6 +15,7 @@ def utils
 
 def buildMatrix = [
     [ "enabled": true,  "os" : "linux", "withGpu": true, "withNccl": true,  "withOmp": true, "withSpark": true, "cudaVersion": "10.0"],
+    [ "enabled": true,  "os" : "linux", "withGpu": true, "withNccl": true,  "withOmp": true, "withSpark": true, "cudaVersion": "9.2"],
 ]
 
 pipeline {
@@ -59,10 +60,7 @@ pipeline {
                 script {
                     echo 'run buildFactory'
                     buildPlatformCmake("sparkgpu", buildMatrix[0], "docker-gpu", "sparkgpu")
-                    //buildMatrix.findAll{it['enabled']}.collectEntries{ c ->
-                    //    def buildName = "sparkgpu"
-                    //    utils.buildFactory(buildName, c, false, this.&buildPlatformCmake)
-                    //}
+                    buildPlatformCmake("sparkgpu", buildMatrix[1], "docker-gpu", "sparkgpu")
                 }
             }
         }
@@ -87,8 +85,11 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
     echo 'Begin buildPlatformCmake'
     def distDir = "dist/${buildName}"
     def dockerArgs = ""
+    def buildCommand = "tests/ci_build/build_jvm_deploy.sh "
     if (conf["withGpu"]) {
-        dockerArgs = "--build-arg CUDA_VERSION=" + conf["cudaVersion"]
+        dockerArgs = "--build-arg CUDA_VER=" + conf["cudaVersion"]
+        buildCommand = buildCommand + conf["cudaVersion"]
+        echo "build command: ${buildCommand}"
     }
     def test_suite = conf["withSpark"] ? "sparkgpu" : (conf["withGpu"] ? (conf["multiGpu"] ? "mgpu" : "gpu") : "cpu")
     // Build node - this is returned result
@@ -104,7 +105,7 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
             """.stripMargin('|')
             // Invoke command inside docker
             sh """
-            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm_deploy.sh
+            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i ${buildCommand}
             """
         }
     }
