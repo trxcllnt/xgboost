@@ -55,9 +55,7 @@
     </repositories>
     <modules>
         <module>xgboost4j</module>
-        <module>xgboost4j-example</module>
         <module>xgboost4j-spark</module>
-        <module>xgboost4j-flink</module>
     </modules>
     <profiles>
         <profile>
@@ -234,6 +232,13 @@
             </resource>
         </resources>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <classifier>${cudf.classifier}</classifier>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.scalastyle</groupId>
                 <artifactId>scalastyle-maven-plugin</artifactId>

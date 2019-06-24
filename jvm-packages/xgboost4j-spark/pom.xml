@@ -19,13 +19,6 @@
                     <skipAssembly>false</skipAssembly>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <configuration>
-                    <classifier>${cudf.classifier}</classifier>
-                </configuration>
-            </plugin>
         </plugins>
     </build>
     <dependencies>
@@ -33,6 +26,7 @@
             <groupId>ai.rapids</groupId>
             <artifactId>xgboost4j</artifactId>
             <version>${self.version}</version>
+            <classifier>${cudf.classifier}</classifier>
         </dependency>
         <dependency>
             <groupId>junit</groupId>
