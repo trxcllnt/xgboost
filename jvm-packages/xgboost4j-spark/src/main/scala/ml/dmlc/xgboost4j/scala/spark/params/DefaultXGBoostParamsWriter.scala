@@ -16,11 +16,12 @@
 
 package ml.dmlc.xgboost4j.scala.spark.params
 
+import ml.dmlc.xgboost4j.scala.spark.params.JasonWrapper._
 import org.apache.hadoop.fs.Path
 import org.apache.spark.SparkContext
 import org.apache.spark.ml.param.{ParamPair, Params}
 import org.json4s.JsonDSL._
-import org.json4s.jackson.JsonMethods._
+import org.json4s.jackson.JsonMethods.{compact, render}
 import org.json4s.{JObject, _}
 
 // This originates from apache-spark DefaultPramsWriter copy paste
