@@ -19,6 +19,6 @@ if [ $1 == "10.0" ]; then
 else
     echo "mvn deploy for cuda9.2"
     mvn -Pcuda9.2 package
-    mvn -Pcuda9.2 deploy -pl xgboost4j-spark,xgboost4j
+    mvn -Pcuda9.2 deploy -pl xgboost4j,xgboost4j-spark
 fi
 popd
