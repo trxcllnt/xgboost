@@ -15,7 +15,7 @@ ENV PATH=${PATH}:/conda/bin
 RUN conda init && \
     . ~/.bashrc && \
     conda install -y cmake openjdk maven
-RUN conda install -y -c rapidsai-nightly/label/cuda$CUDA_VER libcudf
+RUN conda install -y -c rapidsai-nightly/label/cuda$CUDA_VER libcudf librmm
 
 RUN apt update && \
     apt install -y --allow-change-held-packages libnccl2=2.4.7-1+cuda$CUDA_VER libnccl-dev=2.4.7-1+cuda$CUDA_VER
