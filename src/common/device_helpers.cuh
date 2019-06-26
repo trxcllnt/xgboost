@@ -4,11 +4,12 @@
 #pragma once
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
+#include <thrust/device_malloc_allocator.h>
 #include <thrust/system/cuda/error.h>
 #include <thrust/system_error.h>
 #include <xgboost/logging.h>
 #include <rabit/rabit.h>
+#include <cub/util_allocator.cuh>
 
 #include "common.h"
 #include "span.h"
@@ -49,11 +50,6 @@ inline ncclResult_t ThrowOnNcclError(ncclResult_t code, const char *file,
   return code;
 }
 #endif
-
-template <typename T>
-T *Raw(thrust::device_vector<T> &v) {  //  NOLINT
-  return raw_pointer_cast(v.data());
-}
 
 inline void CudaCheckPointerDevice(void* ptr) {
   cudaPointerAttributes attr;
@@ -237,24 +233,152 @@ inline void LaunchN(int device_idx, size_t n, L lambda) {
   LaunchN<ITEMS_PER_THREAD, BLOCK_THREADS>(device_idx, n, nullptr, lambda);
 }
 
-inline void BatchEntrySegments
-(int device, const size_t* offsets, size_t n_rows, size_t batch_nrows,
- thrust::host_vector<size_t>* segments) {
-  size_t n_batches = DivRoundUp(n_rows, batch_nrows);
-  segments->resize(n_batches + 1);
-  thrust::device_vector<size_t> segments_d(n_batches + 1);
-  size_t* segments_ptr = segments_d.data().get();
-  LaunchN(device, n_batches, [=] __device__ (size_t i) {
-      segments_ptr[i] = offsets[min(i * batch_nrows, n_rows)];
-      if (i == n_batches - 1) {
-        // also write the end of the last batch
-        segments_ptr[n_batches] = offsets[n_rows];
+namespace detail {
+/** \brief Keeps track of global device memory allocations. Thread safe.*/
+class MemoryLogger {
+  // Information for a single device
+  struct DeviceStats {
+    size_t currently_allocated_bytes{ 0 };
+    size_t peak_allocated_bytes{ 0 };
+    size_t num_allocations{ 0 };
+    size_t num_deallocations{ 0 };
+    std::map<void *, size_t> device_allocations;
+    void RegisterAllocation(void *ptr, size_t n) {
+      device_allocations[ptr] = n;
+      currently_allocated_bytes += n;
+      peak_allocated_bytes =
+        std::max(peak_allocated_bytes, currently_allocated_bytes);
+      num_allocations++;
+      CHECK_GT(num_allocations, num_deallocations);
+    }
+    void RegisterDeallocation(void *ptr, size_t n, int current_device) {
+      auto itr = device_allocations.find(ptr);
+      if (itr == device_allocations.end()) {
+        LOG(FATAL) << "Attempting to deallocate " << n << " bytes on device "
+                   << current_device << " that was never allocated ";
       }
-    });
-  thrust::copy(segments_d.begin(), segments_d.end(), segments->begin());
+      num_deallocations++;
+      CHECK_LE(num_deallocations, num_allocations);
+      CHECK_EQ(itr->second, n);
+      currently_allocated_bytes -= itr->second;
+      device_allocations.erase(itr);
+    }
+  };
+  std::map<int, DeviceStats>
+    stats_;  // Map device ordinal to memory information
+  std::mutex mutex_;
+
+public:
+  void RegisterAllocation(void *ptr, size_t n) {
+    if (!xgboost::ConsoleLogger::ShouldLog(xgboost::ConsoleLogger::LV::kDebug))
+      return;
+    std::lock_guard<std::mutex> guard(mutex_);
+    int current_device;
+    safe_cuda(cudaGetDevice(&current_device));
+    stats_[current_device].RegisterAllocation(ptr, n);
+    CHECK_LE(stats_[current_device].peak_allocated_bytes, dh::TotalMemory(current_device));
+  }
+  void RegisterDeallocation(void *ptr, size_t n) {
+    if (!xgboost::ConsoleLogger::ShouldLog(xgboost::ConsoleLogger::LV::kDebug))
+      return;
+    std::lock_guard<std::mutex> guard(mutex_);
+    int current_device;
+    safe_cuda(cudaGetDevice(&current_device));
+    stats_[current_device].RegisterDeallocation(ptr, n, current_device);
+  }
+  void Log() {
+    if (!xgboost::ConsoleLogger::ShouldLog(xgboost::ConsoleLogger::LV::kDebug))
+      return;
+    std::lock_guard<std::mutex> guard(mutex_);
+    for (const auto &kv : stats_) {
+      LOG(CONSOLE) << "======== Device " << kv.first << " Memory Allocations: "
+        << " ========";
+      LOG(CONSOLE) << "Peak memory usage: "
+        << kv.second.peak_allocated_bytes / 1000000 << "mb";
+      LOG(CONSOLE) << "Number of allocations: " << kv.second.num_allocations;
+    }
+  }
+};
+};
+
+inline detail::MemoryLogger &GlobalMemoryLogger() {
+  static detail::MemoryLogger memory_logger;
+  return memory_logger;
 }
 
+namespace detail{
+/**
+ * \brief Default memory allocator, uses cudaMalloc/Free and logs allocations if verbose.
+ */
+template <class T>
+struct XGBDefaultDeviceAllocatorImpl : thrust::device_malloc_allocator<T> {
+  using super_t = thrust::device_malloc_allocator<T>;
+  using pointer = thrust::device_ptr<T>;
+  template<typename U>
+  struct rebind
+  {
+    typedef XGBDefaultDeviceAllocatorImpl<U> other;
+  };
+  pointer allocate(size_t n) {
+    pointer ptr = super_t::allocate(n);
+    GlobalMemoryLogger().RegisterAllocation(ptr.get(), n);
+    return ptr;
+  }
+  void deallocate(pointer ptr, size_t n) {
+    GlobalMemoryLogger().RegisterDeallocation(ptr.get(), n);
+    return super_t::deallocate(ptr, n);
+  }
+};
 
+/**
+ * \brief Caching memory allocator, uses cub::CachingDeviceAllocator as a back-end and logs allocations if verbose. Does not initialise memory on construction.
+ */
+template <class T>
+struct XGBCachingDeviceAllocatorImpl : thrust::device_malloc_allocator<T> {
+  using pointer = thrust::device_ptr<T>;
+  template<typename U>
+  struct rebind
+  {
+    typedef XGBCachingDeviceAllocatorImpl<U> other;
+  };
+   cub::CachingDeviceAllocator& GetGlobalCachingAllocator ()
+   {
+    // Configure allocator with maximum cached bin size of ~1GB and no limit on
+    // maximum cached bytes
+     static cub::CachingDeviceAllocator allocator(8,3,10);
+     return allocator;
+   }
+   pointer allocate(size_t n) {
+     T *ptr;
+     GetGlobalCachingAllocator().DeviceAllocate(reinterpret_cast<void **>(&ptr),
+                                                n * sizeof(T));
+     pointer thrust_ptr = thrust::device_ptr<T>(ptr);
+     GlobalMemoryLogger().RegisterAllocation(thrust_ptr.get(), n);
+     return thrust_ptr;
+   }
+   void deallocate(pointer ptr, size_t n) {
+     GlobalMemoryLogger().RegisterDeallocation(ptr.get(), n);
+     GetGlobalCachingAllocator().DeviceFree(ptr.get());
+   }
+  __host__ __device__
+    void construct(T *)
+  {
+    // no-op
+  }
+};
+};
+
+// Declare xgboost allocators
+// Replacement of allocator with custom backend should occur here
+template <typename T>
+using XGBDeviceAllocator = detail::XGBDefaultDeviceAllocatorImpl<T>;
+template <typename T>
+using XGBCachingDeviceAllocator = detail::XGBCachingDeviceAllocatorImpl<T>;
+/** \brief Specialisation of thrust device vector using custom allocator. */
+template <typename T>
+using device_vector = thrust::device_vector<T,  XGBDeviceAllocator<T>>;
+template <typename T>
+using caching_device_vector = thrust::device_vector<T,  XGBCachingDeviceAllocator<T>>;
 /**
  * \brief A double buffer, useful for algorithms like sort.
  */
@@ -264,6 +388,14 @@ class DoubleBuffer {
   cub::DoubleBuffer<T> buff;
   xgboost::common::Span<T> a, b;
   DoubleBuffer() = default;
+  template <typename VectorT>
+  DoubleBuffer(VectorT *v1, VectorT *v2) {
+    a = xgboost::common::Span<T>(v1->data().get(), v1->size());
+    b = xgboost::common::Span<T>(v2->data().get(), v2->size());
+    buff.d_buffers[0] = v1->data().get();
+    buff.d_buffers[1] = v2->data().get();
+    buff.selector = 0;
+  }
 
   size_t Size() const {
     CHECK_EQ(a.size(), b.size());
@@ -290,6 +422,20 @@ class DoubleBuffer {
  */
 template <typename T>
 void CopyDeviceSpanToVector(std::vector<T> *dst, xgboost::common::Span<T> src) {
+  CHECK_EQ(dst->size(), src.size());
+  dh::safe_cuda(cudaMemcpyAsync(dst->data(), src.data(), dst->size() * sizeof(T),
+                                cudaMemcpyDeviceToHost));
+}
+
+/**
+ * \brief Copies const device span to std::vector.
+ *
+ * \tparam  T Generic type parameter.
+ * \param [in,out]  dst Copy destination.
+ * \param           src Copy source. Must be device memory.
+ */
+template <typename T>
+void CopyDeviceSpanToVector(std::vector<T> *dst, xgboost::common::Span<const T> src) {
   CHECK_EQ(dst->size(), src.size());
   dh::safe_cuda(cudaMemcpyAsync(dst->data(), src.data(), dst->size() * sizeof(T),
                                 cudaMemcpyDeviceToHost));
@@ -364,10 +510,9 @@ class BulkAllocator {
   }
 
   char *AllocateDevice(int device_idx, size_t bytes) {
-    char *ptr;
     safe_cuda(cudaSetDevice(device_idx));
-    safe_cuda(cudaMalloc(&ptr, bytes));
-    return ptr;
+    XGBDeviceAllocator<char> allocator;
+    return allocator.allocate(bytes).get();
   }
 
   template <typename T>
@@ -412,7 +557,8 @@ class BulkAllocator {
     for (size_t i = 0; i < d_ptr_.size(); i++) {
       if (!(d_ptr_[i] == nullptr)) {
         safe_cuda(cudaSetDevice(device_idx_[i]));
-        safe_cuda(cudaFree(d_ptr_[i]));
+        XGBDeviceAllocator<char> allocator;
+        allocator.deallocate(thrust::device_ptr<char>(d_ptr_[i]), size_[i]);
         d_ptr_[i] = nullptr;
       }
     }
@@ -482,14 +628,19 @@ struct CubMemory {
 
   void Free() {
     if (this->IsAllocated()) {
-      safe_cuda(cudaFree(d_temp_storage));
+      XGBDeviceAllocator<uint8_t> allocator;
+      allocator.deallocate(thrust::device_ptr<uint8_t>(static_cast<uint8_t *>(d_temp_storage)),
+        temp_storage_bytes);
+      d_temp_storage = nullptr;
+      temp_storage_bytes = 0;
     }
   }
 
   void LazyAllocate(size_t num_bytes) {
     if (num_bytes > temp_storage_bytes) {
       Free();
-      safe_cuda(cudaMalloc(&d_temp_storage, num_bytes));
+      XGBDeviceAllocator<uint8_t> allocator;
+      d_temp_storage = static_cast<void *>(allocator.allocate(num_bytes).get());
       temp_storage_bytes = num_bytes;
     }
   }
@@ -1060,6 +1211,7 @@ class AllReducer {
    * safe) using the master thread. Uses naive reduce algorithm for local
    * threads, don't expect this to scale.*/
   void HostMaxAllReduce(std::vector<size_t> *p_data) {
+#ifdef XGBOOST_USE_NCCL
     auto &data = *p_data;
     // Wait in case some other thread is accessing host_data
 #pragma omp barrier
@@ -1090,6 +1242,7 @@ class AllReducer {
     for (auto i = 0ull; i < data.size(); i++) {
       data[i] = host_data[i];
     }
+#endif
   }
 };
 
@@ -1148,7 +1301,7 @@ ReduceT ReduceShards(std::vector<ShardT> *shards, FunctionT f) {
 template <typename T,
   typename IndexT = typename xgboost::common::Span<T>::index_type>
 xgboost::common::Span<T> ToSpan(
-    thrust::device_vector<T>& vec,
+    device_vector<T>& vec,
     IndexT offset = 0,
     IndexT size = -1) {
   size = size == -1 ? vec.size() : size;
