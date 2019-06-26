@@ -47,11 +47,6 @@
             <name>central maven</name>
             <url>https://repo1.maven.org/maven2</url>
         </repository>
-        <repository>
-            <id>spark.sw.nvidia.com</id>
-            <name>sw-spark-maven</name>
-            <url>https://gpuwa.nvidia.com/artifactory/sw-spark-maven</url>
-        </repository>
     </repositories>
     <modules>
         <module>xgboost4j</module>
@@ -217,13 +212,6 @@
             </build>
         </profile>
     </profiles>
-    <distributionManagement>
-        <repository>
-            <id>spark.sw.nvidia.com</id>
-            <name>sw-spark-maven</name>
-            <url>https://gpuwa.nvidia.com/artifactory/sw-spark-maven-local</url>
-        </repository>
-    </distributionManagement>
     <build>
         <resources>
             <resource>
