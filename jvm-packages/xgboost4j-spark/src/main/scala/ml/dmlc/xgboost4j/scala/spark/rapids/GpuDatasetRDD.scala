@@ -21,6 +21,7 @@ import java.util.NoSuchElementException
 
 import ai.rapids.cudf.Table
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
+import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.parquet.io.ParquetDecodingException
 import org.apache.spark.{Partition, SerializableWritable, TaskContext}
@@ -38,6 +39,8 @@ private[spark] class GpuDatasetRDD(
     @transient val filePartitions: Seq[FilePartition],
     schema: StructType)
   extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
+
+  private val logger = LogFactory.getLog(classOf[GpuDatasetRDD])
 
   // The resulting iterator will only return a single GpuColumnBatch.
   override def compute(split: Partition, context: TaskContext): Iterator[GpuColumnBatch] = {
@@ -57,7 +60,6 @@ private[spark] class GpuDatasetRDD(
       }
 
       override def close(): Unit = batchedTable.foreach({ _.close() })
-
     }
 
     // Register an on-task-completion callback to close the input stream.
@@ -71,8 +73,16 @@ private[spark] class GpuDatasetRDD(
     val filePart = split.asInstanceOf[FilePartition]
     val hostToNumBytes = scala.collection.mutable.HashMap.empty[String, Long]
     filePart.files.foreach { file =>
-      file.locations.filter(_ != "localhost").foreach { host =>
-        hostToNumBytes(host) = hostToNumBytes.getOrElse(host, 0L) + file.length
+      try {
+        file.locations.filter(_ != "localhost").foreach { host =>
+          hostToNumBytes(host) = hostToNumBytes.getOrElse(host, 0L) + file.length
+        }
+      } catch {
+        case e: NoSuchMethodError =>
+          // This would fail because some Spark implementations have overloaded FilePartition
+          // We handle this in GpuDataset but we never set the locations in those cases
+          // so do nothing here
+          logger.debug("Not a Spark FilePartition, skipping getting locations")
       }
     }
 
