@@ -13,5 +13,5 @@ trap cleanup EXIT
 WORKDIR=`pwd`
 rm -fr build
 pushd jvm-packages
-mvn -Dmaven.repo.local=$WORKDIR/.m2 clean package
+mvn -Dmaven.repo.local=$WORKDIR/.m2 clean package -Dcudf.classifier=cuda10-centos7
 popd
