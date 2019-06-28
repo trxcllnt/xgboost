@@ -20,9 +20,9 @@ def buildMatrix = [
 pipeline {
     agent any
 
-    environment {
-        DOCKER_CACHE_REPO = 'apt-sh04.nvidia.com:5005'
-    }
+//    environment {
+//        DOCKER_CACHE_REPO = 'apt-sh04.nvidia.com:5005'
+//    }
 
     // Setup common job properties
     options {
@@ -54,11 +54,7 @@ pipeline {
             steps {
                 script {
                     echo 'run buildFactory'
-                    buildPlatformCmake("sparkgpu", buildMatrix[0], "docker-gpu", "sparkgpu")
-                    //buildMatrix.findAll{it['enabled']}.collectEntries{ c ->
-                    //    def buildName = "sparkgpu"
-                    //    utils.buildFactory(buildName, c, false, this.&buildPlatformCmake)
-                    //}
+                    buildPlatformCmake("sparkgpu", buildMatrix[0], "docker-gpu", "gpu_centos7")
                 }
             }
         }
@@ -94,13 +90,12 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
             echo """
             |===== XGBoost Spark  build =====
             |  dockerTarget: ${dockerTarget}
-            |  distDir   : ${distDir}
             |  test_suite : ${test_suite}
             |=========================
             """.stripMargin('|')
             // Invoke command inside docker
             sh """
-            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm.sh
+            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm_centos7.sh
             """
         }
     }

@@ -20,9 +20,9 @@ def buildMatrix = [
 pipeline {
     agent any
 
-    environment {
-        DOCKER_CACHE_REPO = 'apt-sh04.nvidia.com:5005'
-    }
+//    environment {
+//        DOCKER_CACHE_REPO = 'apt-sh04.nvidia.com:5005'
+//    }
 
     // Setup common job properties
     options {
