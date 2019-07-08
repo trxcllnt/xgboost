@@ -13,5 +13,5 @@ trap cleanup EXIT
 WORKDIR=`pwd`
 rm -fr build
 pushd jvm-packages
-mvn -Dmaven.repo.local=$WORKDIR/.m2 clean package
+mvn -DskipTests -Dmaven.repo.local=$WORKDIR/.m2 clean package
 popd
