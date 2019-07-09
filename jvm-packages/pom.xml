@@ -24,12 +24,11 @@
         </developer>
     </developers>
     <scm>
-        <connection>scm:git:git:/github.com/dmlc/xgboost.git</connection>
-        <developerConnection>scm:git:ssh://github.com/dmlc/xgboost.git</developerConnection>
-        <url>https://github.com/dmlc/xgboost</url>
+        <connection>scm:git:git:/github.com/rapidsai/xgboost.git</connection>
+        <developerConnection>scm:git:ssh://github.com/rapidsai/xgboost.git</developerConnection>
+        <url>https://github.com/rapidsai/xgboost</url>
     </scm>
     <properties>
-        <self.version>0.90-SNAPSHOT</self.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.source>1.7</maven.compiler.source>
@@ -47,11 +46,6 @@
             <name>central maven</name>
             <url>https://repo1.maven.org/maven2</url>
         </repository>
-        <repository>
-            <id>spark.sw.nvidia.com</id>
-            <name>sw-spark-maven</name>
-            <url>https://gpuwa.nvidia.com/artifactory/sw-spark-maven</url>
-        </repository>
     </repositories>
     <modules>
         <module>xgboost4j</module>
@@ -63,6 +57,21 @@
             <properties>
                 <cudf.classifier></cudf.classifier>
             </properties>
+        </profile>
+        <profile>
+            <id>local-repo</id>
+            <activation>
+                <property>
+                    <name>!release-build</name>
+                </property>
+            </activation>
+            <repositories>
+                <repository>
+                    <id>spark.sw.nvidia.com</id>
+                    <name>sw-spark-maven</name>
+                    <url>https://gpuwa.nvidia.com/artifactory/sw-spark-maven</url>
+                </repository>
+            </repositories>
         </profile>
         <profile>
             <id>release</id>
@@ -211,6 +220,76 @@
                         <version>2.8.2</version>
                         <configuration>
                             <altDeploymentRepository>internal.repo::default::file://${project.build.directory}/mvn-repo</altDeploymentRepository>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>release-to-sonatype</id>
+            <distributionManagement>
+                <snapshotRepository>
+                    <id>ossrh</id>
+                    <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+                </snapshotRepository>
+            </distributionManagement>
+            <properties>
+                <gpg.passphrase>${GPG_PASSPHRASE}</gpg.passphrase>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>2.2.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>2.9.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                                <configuration>
+                                    <additionalparam>-Xdoclint:none</additionalparam>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.5</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.plugins</groupId>
+                        <artifactId>nexus-staging-maven-plugin</artifactId>
+                        <version>1.6.7</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <serverId>ossrh</serverId>
+                            <nexusUrl>https://oss.sonatype.org/</nexusUrl>
+                            <autoReleaseAfterClose>false</autoReleaseAfterClose>
                         </configuration>
                     </plugin>
                 </plugins>
