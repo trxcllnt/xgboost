@@ -281,6 +281,9 @@ class XGBoostRegressionModel private[ml] (
       Seq(StructField(name = _originalPredictionCol, dataType =
         ArrayType(FloatType, containsNull = false), nullable = false)))
 
+    // since native model will not save predictor context, force to gpu predictor
+    _booster.setParam("predictor", "gpu_predictor")
+
     val bBooster = dataset.sparkSession.sparkContext.broadcast(_booster)
     val appName = dataset.sparkSession.sparkContext.appName
 
