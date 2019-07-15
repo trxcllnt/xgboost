@@ -39,6 +39,34 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
 
+/*
+ * Note on compatibility with different versions of Spark:
+ *
+ * Some versions of Spark have slightly different internal classes. The list of
+ * known ones are below. If any of these are used make sure we handle appropriately.
+ *
+ * PartitionDirectory:
+ *   Apache Spark:
+ *     case class PartitionDirectory(values: InternalRow, files: Seq[FileStatus])
+ *   We have seen it overloaded as:
+ *     case class PartitionDirectory(values: InternalRow, files: Seq[OtherFileStatus])
+ *       Where OtherFileStatus is not a Hadoop FileStatus but has the same methods for
+ *       getLen and getPath
+ * FilePartition:
+ *   Apache Spark:
+ *     case class FilePartition(index: Int, files: Array[PartitionedFile])
+ *   We have see this overloaded as:
+ *     case class FilePartition(index: Int, files: Seq[PartitionedFile],
+ *       preferredHosts: Seq[String])
+ * PartitionedFile:
+ *   Apache Spark:
+ *     case class PartitionedFile(partitionValues: InternalRow,
+ *       filePath: String, start: Long, length: Long, locations: Array[String])
+ *   We have seen it overloaded as:
+ *     case class PartitionedFile(partitionValues: InternalRow,
+ *       filePath: String, start: Long, length: Long, locations: Seq[String])
+ */
+
 class GpuDataset(fsRelation: HadoopFsRelation,
     sourceType: String,
     sourceOptions: Map[String, String],
@@ -126,30 +154,108 @@ class GpuDataset(fsRelation: HadoopFsRelation,
   /** The SparkSession that created this GpuDataset. */
   def sparkSession: SparkSession = fsRelation.sparkSession
 
+  private def getTotalBytes(
+      partitions: Seq[PartitionDirectory],
+      openCostInBytes: Long): Long = {
+    partitions.flatMap { partitionDir =>
+      getFileLengthsFromPartitionDir(partitionDir, openCostInBytes)
+    }.sum
+  }
+
+  private def getFileLengthsFromPartitionDir(
+      partitionDir: PartitionDirectory,
+      openCostInBytes: Long): Seq[Long] = {
+    if (partitionDir.files.nonEmpty) {
+      // Should be a Hadoop FileStatus, but we have seen people overload this
+      // Luckily the overloaded version has the same getLen method. Here we
+      // only do the reflection when we really need to.
+      if (partitionDir.files(0).isInstanceOf[FileStatus]) {
+        partitionDir.files.map(_.getLen + openCostInBytes)
+      } else {
+        logger.debug(s"Not a FileStatus, class is: ${partitionDir.files(0).getClass}")
+        partitionDir.files.asInstanceOf[Seq[Any]].map { file =>
+          getLenReflection(file) + openCostInBytes
+        }.asInstanceOf[Seq[Long]]
+      }
+    } else {
+      Seq.empty[Long]
+    }
+  }
+
+  private def getLenReflection(file: Any): Long = {
+    val len = try {
+      val getLen = file.getClass.getMethod("getLen")
+      getLen.invoke(file).asInstanceOf[Long]
+    } catch {
+      case e: Exception =>
+        val errorMsg = s"Unsupported File Status type ${file.getClass}, failed calling getLen"
+        throw new UnsupportedOperationException(errorMsg, e)
+    }
+    len.asInstanceOf[Long]
+  }
+
+  private def getPathReflection(file: Any): Path = {
+    val fpath = try {
+      val getPath = file.getClass.getMethod("getPath")
+      getPath.invoke(file).asInstanceOf[Path]
+    } catch {
+      case e: Exception =>
+        val errorMsg = s"Unsupported File Status type ${file.getClass}, failed calling getPath"
+        throw new UnsupportedOperationException(errorMsg, e)
+    }
+    fpath.asInstanceOf[Path]
+  }
+
+  private def getSplits(
+      partitions: Seq[PartitionDirectory],
+      maxSplitBytes: Long): Seq[PartitionedFile] = {
+    partitions.flatMap { partitionDir =>
+      if (partitionDir.files.nonEmpty) {
+        // Should be a Hadoop FileStatus, but we have seen people overload this
+        // Luckily the overloaded version has the same methods. Here we
+        // only do the reflection when we really need to.
+        if (partitionDir.files(0).isInstanceOf[FileStatus]) {
+          partitionDir.files.filter(_.getLen > 0).flatMap { file =>
+            // getPath() is very expensive so we only want to call it once in this block:
+            val filePath = file.getPath
+            val isSplitable = fsRelation.fileFormat.isSplitable(
+              fsRelation.sparkSession, fsRelation.options, filePath)
+            splitFile(
+              file = file,
+              filePath = filePath,
+              isSplitable = isSplitable,
+              maxSplitBytes = maxSplitBytes,
+              partitionValues = partitionDir.values
+            )
+          }
+        } else {
+          logger.debug(s"Not a FileStatus, class is: ${partitionDir.files(0).getClass}")
+          val pfs = partitionDir.files.asInstanceOf[Seq[Any]].flatMap { file =>
+            // skip the splitable stuff for now since not used anyway
+            splitFileReflection(
+              filePath = getPathReflection(file),
+              fileLength = getLenReflection(file),
+              partitionValues = partitionDir.values
+            )
+          }.asInstanceOf[Seq[PartitionedFile]]
+          pfs.filter(_.length > 0)
+        }
+      } else {
+        Seq.empty[PartitionedFile]
+      }
+    }.toArray.sortBy(_.length)(implicitly[Ordering[Long]].reverse)
+  }
+
   private[rapids] lazy val partitions: Seq[FilePartition] = specifiedPartitions.getOrElse{
     val selectedPartitions = fsRelation.location.listFiles(Nil, Nil)
     val openCostInBytes = fsRelation.sparkSession.sessionState.conf.filesOpenCostInBytes
-    val maxSplitBytes = computeMaxSplitBytes(fsRelation.sparkSession, selectedPartitions)
+    val totalBytes = getTotalBytes(selectedPartitions, openCostInBytes)
+    val maxSplitBytes = computeMaxSplitBytes(fsRelation.sparkSession, totalBytes)
     logger.info(s"Planning scan with bin packing, max size: $maxSplitBytes bytes, " +
-      s"open cost is considered as scanning $openCostInBytes bytes.")
+      s"open cost is considered as scanning $openCostInBytes bytes, " +
+      s"total bytes is $totalBytes.")
 
-    val splits = selectedPartitions.flatMap { partition =>
-      partition.files.filter(_.getLen > 0).flatMap { file =>
-        // getPath() is very expensive so we only want to call it once in this block:
-        val filePath = file.getPath
-        val isSplitable = fsRelation.fileFormat.isSplitable(
-          fsRelation.sparkSession, fsRelation.options, filePath)
-        splitFile(
-          sparkSession = fsRelation.sparkSession,
-          file = file,
-          filePath = filePath,
-          isSplitable = isSplitable,
-          maxSplitBytes = maxSplitBytes,
-          partitionValues = partition.values
-        )
-      }
-    }.toArray.sortBy(_.length)(implicitly[Ordering[Long]].reverse)
-
+    val splits = getSplits(selectedPartitions, maxSplitBytes)
     val partitions = getFilePartitions(fsRelation.sparkSession, splits, maxSplitBytes)
     partitions
   }
@@ -166,7 +272,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     def closePartition(): Unit = {
       if (currentFiles.nonEmpty) {
         // Copy to a new Array.
-        val newPartition = FilePartition(partitions.size, currentFiles.toArray.toSeq)
+        val newPartition =
+          GpuDataset.createFilePartition(partitions.size, currentFiles.toArray.toSeq)
         partitions += newPartition
       }
       currentFiles.clear()
@@ -188,18 +295,43 @@ class GpuDataset(fsRelation: HadoopFsRelation,
   }
 
   private def computeMaxSplitBytes(sparkSession: SparkSession,
-      selectedPartitions: Seq[PartitionDirectory]): Long = {
+      totalBytes: Long): Long = {
     val defaultMaxSplitBytes = sparkSession.sessionState.conf.filesMaxPartitionBytes
     val openCostInBytes = sparkSession.sessionState.conf.filesOpenCostInBytes
     val defaultParallelism = sparkSession.sparkContext.defaultParallelism
-    val totalBytes = selectedPartitions.flatMap(_.files.map(_.getLen + openCostInBytes)).sum
     val bytesPerCore = totalBytes / defaultParallelism
 
     Math.min(defaultMaxSplitBytes, Math.max(openCostInBytes, bytesPerCore))
   }
 
+  private def splitFileReflection(
+      filePath: Path,
+      fileLength: Long,
+      partitionValues: InternalRow): Seq[PartitionedFile] = {
+    // Apache Spark open source:
+    // case class PartitionedFile(partitionValues: InternalRow,
+    //   filePath: String, start: Long, length: Long, locations: Array[String])
+    // We have seen it overloaded as:
+    // case class PartitionedFile(partitionValues: InternalRow,
+    //   filePath: String, start: Long, length: Long, locations: Seq[String])
+    val partitionedFile = try {
+      val partedFileApply = org.apache.spark.sql.execution.datasources.PartitionedFile.getClass
+        .getMethod("apply", classOf[InternalRow], classOf[String], classOf[Long],
+          classOf[Long], classOf[Seq[String]])
+
+      // not getting the file locations for now
+      partedFileApply.invoke(org.apache.spark.sql.execution.datasources.PartitionedFile,
+        partitionValues, filePath.toUri.toString, new java.lang.Long(0),
+          new java.lang.Long(fileLength), Seq.empty[String]).asInstanceOf[PartitionedFile]
+    } catch {
+      case e: Exception =>
+        val errorMsg = s"Unsupported PartitionedFile type, failed to create"
+        throw new UnsupportedOperationException(errorMsg, e)
+    }
+    Seq(partitionedFile)
+  }
+
   private def splitFile(
-      sparkSession: SparkSession,
       file: FileStatus,
       filePath: Path,
       isSplitable: Boolean,
@@ -613,6 +745,28 @@ object GpuDataset {
     "sep" -> parseCSVSepOption
   )
 
+  private def createFilePartition(
+      size: Int,
+      files: Seq[PartitionedFile]): FilePartition = {
+    // Apache Spark:
+    // case class FilePartition(index: Int, files: Array[PartitionedFile])
+    // We have see this overloaded as:
+    // case class FilePartition(index: Int, files: Seq[PartitionedFile],
+    //   preferredHosts: Seq[String])
+    // We skip setting the preferredHosts for overloaded version
+    try {
+      FilePartition(size, files)
+    } catch {
+      case e: NoSuchMethodError =>
+        logger.debug("FilePartition, normal Apache Spark version failed")
+        // assume this is the one overloaded class we know about
+        val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
+          getMethod("apply", classOf[Int], classOf[Seq[PartitionedFile]], classOf[Seq[String]])
+        fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
+          new java.lang.Integer(size), files, Seq.empty[String]).asInstanceOf[FilePartition]
+    }
+  }
+
   private class PartBucket(initFile: PartitionedFile) {
     private val files: ArrayBuffer[PartitionedFile] = ArrayBuffer(initFile)
     private var size = initFile.length
@@ -624,6 +778,6 @@ object GpuDataset {
       size += file.length
     }
 
-    def toFilePartition(index: Int): FilePartition = FilePartition(index, files)
+    def toFilePartition(index: Int): FilePartition = createFilePartition(index, files)
   }
 }

@@ -49,6 +49,10 @@ struct HostDeviceVectorImpl {
       : proper_size_{0}, device_{-1}, start_{0}, perm_d_{false},
         cached_size_{static_cast<size_t>(~0)}, vec_{nullptr} {}
 
+    ~DeviceShard() {
+      SetDevice();
+    }
+
     void Init(HostDeviceVectorImpl<T>* vec, int device) {
       if (vec_ == nullptr) { vec_ = vec; }
       CHECK_EQ(vec, vec_);
@@ -161,7 +165,7 @@ struct HostDeviceVectorImpl {
 
    private:
     int device_;
-    thrust::device_vector<T> data_;
+    dh::device_vector<T> data_;
     // cached vector size
     size_t cached_size_;
     size_t start_;
@@ -360,7 +364,9 @@ struct HostDeviceVectorImpl {
 
   void Shard(const GPUDistribution& distribution) {
     if (distribution_ == distribution) { return; }
-    CHECK(distribution_.IsEmpty());
+    CHECK(distribution_.IsEmpty())
+        << "This: " << distribution_.Devices().Size() << ", "
+        << "Others: " << distribution.Devices().Size();
     distribution_ = distribution;
     InitShards();
   }
