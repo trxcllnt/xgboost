@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 #include "../helpers.h"
 
+#if defined(XGBOOST_USE_NCCL)
 namespace {
 
 inline void CheckCAPICall(int ret) {
@@ -17,6 +18,7 @@ inline void CheckCAPICall(int ret) {
 }
 
 }  // namespace anonymous
+#endif
 
 extern const std::map<std::string, std::string>&
 QueryBoosterConfigurationArguments(BoosterHandle handle);
@@ -36,11 +38,11 @@ TEST(gpu_predictor, Test) {
   gpu_predictor->Init({}, {});
   cpu_predictor->Init({}, {});
 
-  gbm::GBTreeModel model = CreateTestModel();
-
   int n_row = 5;
   int n_col = 5;
 
+  gbm::GBTreeModel model = CreateTestModel();
+  model.param.num_feature = n_col;
   auto dmat = CreateDMatrix(n_row, n_col, 0);
 
   // Test predict batch
@@ -93,6 +95,8 @@ TEST(gpu_predictor, ExternalMemoryTest) {
       std::unique_ptr<Predictor>(Predictor::Create("gpu_predictor", &lparam));
   gpu_predictor->Init({}, {});
   gbm::GBTreeModel model = CreateTestModel();
+  int n_col = 3;
+  model.param.num_feature = n_col;
   std::unique_ptr<DMatrix> dmat = CreateSparsePageDMatrix(32, 64);
 
   // Test predict batch
@@ -114,17 +118,25 @@ TEST(gpu_predictor, ExternalMemoryTest) {
   // Test predict contribution
   std::vector<float> out_contribution;
   gpu_predictor->PredictContribution(dmat.get(), &out_contribution, model);
-  EXPECT_EQ(out_contribution.size(), dmat->Info().num_row_);
-  for (const auto& v : out_contribution) {
-    ASSERT_EQ(v, 1.5);
+  EXPECT_EQ(out_contribution.size(), dmat->Info().num_row_ * (n_col + 1));
+  for (int i = 0; i < out_contribution.size(); i++) {
+    if (i % (n_col + 1) == n_col) {
+      ASSERT_EQ(out_contribution[i], 1.5);
+    } else {
+      ASSERT_EQ(out_contribution[i], 0);
+    }
   }
 
   // Test predict contribution (approximate method)
   std::vector<float> out_contribution_approximate;
   gpu_predictor->PredictContribution(dmat.get(), &out_contribution_approximate, model, true);
-  EXPECT_EQ(out_contribution_approximate.size(), dmat->Info().num_row_);
-  for (const auto& v : out_contribution_approximate) {
-    ASSERT_EQ(v, 1.5);
+  EXPECT_EQ(out_contribution.size(), dmat->Info().num_row_ * (n_col + 1));
+  for (int i = 0; i < out_contribution.size(); i++) {
+    if (i % (n_col + 1) == n_col) {
+      ASSERT_EQ(out_contribution[i], 1.5);
+    } else {
+      ASSERT_EQ(out_contribution[i], 0);
+    }
   }
 }
 
@@ -145,25 +157,30 @@ TEST(gpu_predictor, MGPU_PicklingTest) {
   }
 
   // Load data matrix
-  CheckCAPICall(XGDMatrixCreateFromFile(tmp_file.c_str(), 0, &dmat[0]));
-  CheckCAPICall(XGDMatrixSetFloatInfo(dmat[0], "label", label.data(), 200));
+  ASSERT_EQ(XGDMatrixCreateFromFile(
+      tmp_file.c_str(), 0, &dmat[0]), 0) << XGBGetLastError();
+  ASSERT_EQ(XGDMatrixSetFloatInfo(
+      dmat[0], "label", label.data(), 200), 0) << XGBGetLastError();
   // Create booster
-  CheckCAPICall(XGBoosterCreate(dmat, 1, &bst));
+  ASSERT_EQ(XGBoosterCreate(dmat, 1, &bst), 0) << XGBGetLastError();
   // Set parameters
-  CheckCAPICall(XGBoosterSetParam(bst, "seed", "0"));
-  CheckCAPICall(XGBoosterSetParam(bst, "base_score", "0.5"));
-  CheckCAPICall(XGBoosterSetParam(bst, "booster", "gbtree"));
-  CheckCAPICall(XGBoosterSetParam(bst, "learning_rate", "0.01"));
-  CheckCAPICall(XGBoosterSetParam(bst, "max_depth", "8"));
-  CheckCAPICall(XGBoosterSetParam(bst, "objective", "binary:logistic"));
-  CheckCAPICall(XGBoosterSetParam(bst, "seed", "123"));
-  CheckCAPICall(XGBoosterSetParam(bst, "tree_method", "gpu_hist"));
-  CheckCAPICall(XGBoosterSetParam(bst, "n_gpus", std::to_string(ngpu).c_str()));
-  CheckCAPICall(XGBoosterSetParam(bst, "predictor", "gpu_predictor"));
+  ASSERT_EQ(XGBoosterSetParam(bst, "seed", "0"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(bst, "base_score", "0.5"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(bst, "booster", "gbtree"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(bst, "learning_rate", "0.01"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(bst, "max_depth", "8"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(
+      bst, "objective", "binary:logistic"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(bst, "seed", "123"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(
+      bst, "tree_method", "gpu_hist"), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(
+      bst, "n_gpus", std::to_string(ngpu).c_str()), 0) << XGBGetLastError();
+  ASSERT_EQ(XGBoosterSetParam(bst, "predictor", "gpu_predictor"), 0) << XGBGetLastError();
 
   // Run boosting iterations
   for (int i = 0; i < 10; ++i) {
-    CheckCAPICall(XGBoosterUpdateOneIter(bst, i, dmat[0]));
+    ASSERT_EQ(XGBoosterUpdateOneIter(bst, i, dmat[0]), 0) << XGBGetLastError();
   }
 
   // Delete matrix
@@ -219,6 +236,7 @@ TEST(gpu_predictor, MGPU_Test) {
     auto dmat = CreateDMatrix(n_row, n_col, 0);
 
     gbm::GBTreeModel model = CreateTestModel();
+    model.param.num_feature = n_col;
 
     // Test predict batch
     HostDeviceVector<float> gpu_out_predictions;
@@ -246,6 +264,7 @@ TEST(gpu_predictor, MGPU_ExternalMemoryTest) {
   gpu_predictor->Init({}, {});
 
   gbm::GBTreeModel model = CreateTestModel();
+  model.param.num_feature = 3;
   const int n_classes = 3;
   model.param.num_output_group = n_classes;
   std::vector<std::unique_ptr<DMatrix>> dmats;

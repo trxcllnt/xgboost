@@ -58,6 +58,14 @@ class ElementWiseMetricsReduction {
 
 #if defined(XGBOOST_USE_CUDA)
 
+  ~ElementWiseMetricsReduction() {
+    for (GPUSet::GpuIdType id = *devices_.begin(); id < *devices_.end(); ++id) {
+      dh::safe_cuda(cudaSetDevice(id));
+      size_t index = devices_.Index(id);
+      allocators_.at(index).Free();
+    }
+  }
+
   PackedReduceResult DeviceReduceMetrics(
       GPUSet::GpuIdType device_id,
       size_t device_index,
@@ -96,6 +104,7 @@ class ElementWiseMetricsReduction {
 #endif  // XGBOOST_USE_CUDA
 
   PackedReduceResult Reduce(
+      const LearnerTrainParam &tparam,
       GPUSet devices,
       const HostDeviceVector<bst_float>& weights,
       const HostDeviceVector<bst_float>& labels,
@@ -107,9 +116,9 @@ class ElementWiseMetricsReduction {
     }
 #if defined(XGBOOST_USE_CUDA)
     else {  // NOLINT
-      if (allocators_.size() != devices.Size()) {
-        allocators_.clear();
-        allocators_.resize(devices.Size());
+      if (allocators_.empty()) {
+        devices_ = GPUSet::All(tparam.gpu_id, tparam.n_gpus);
+        allocators_.resize(devices_.Size());
       }
       preds.Shard(devices);
       labels.Shard(devices);
@@ -135,6 +144,7 @@ class ElementWiseMetricsReduction {
  private:
   EvalRow policy_;
 #if defined(XGBOOST_USE_CUDA)
+  GPUSet devices_;
   std::vector<dh::CubMemory> allocators_;
 #endif  // defined(XGBOOST_USE_CUDA)
 };
@@ -146,6 +156,19 @@ struct EvalRowRMSE {
 
   XGBOOST_DEVICE bst_float EvalRow(bst_float label, bst_float pred) const {
     bst_float diff = label - pred;
+    return diff * diff;
+  }
+  static bst_float GetFinal(bst_float esum, bst_float wsum) {
+    return std::sqrt(esum / wsum);
+  }
+};
+
+struct EvalRowRMSLE {
+  char const* Name() const {
+    return "rmsle";
+  }
+  XGBOOST_DEVICE bst_float EvalRow(bst_float label, bst_float pred) const {
+    bst_float diff = std::log1p(label) - std::log1p(pred);
     return diff * diff;
   }
   static bst_float GetFinal(bst_float esum, bst_float wsum) {
@@ -326,7 +349,7 @@ struct EvalEWiseBase : public Metric {
     GPUSet devices = GPUSet::All(tparam_->gpu_id, tparam_->n_gpus, ndata);
 
     auto result =
-        reducer_.Reduce(devices, info.weights_, info.labels_, preds);
+        reducer_.Reduce(*tparam_, devices, info.weights_, info.labels_, preds);
 
     double dat[2] { result.Residue(), result.Weights() };
     if (distributed) {
@@ -348,6 +371,10 @@ struct EvalEWiseBase : public Metric {
 XGBOOST_REGISTER_METRIC(RMSE, "rmse")
 .describe("Rooted mean square error.")
 .set_body([](const char* param) { return new EvalEWiseBase<EvalRowRMSE>(); });
+
+XGBOOST_REGISTER_METRIC(RMSLE, "rmsle")
+.describe("Rooted mean square log error.")
+.set_body([](const char* param) { return new EvalEWiseBase<EvalRowRMSLE>(); });
 
 XGBOOST_REGISTER_METRIC(MAE, "mae")
 .describe("Mean absolute error.")

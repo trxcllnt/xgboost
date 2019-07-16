@@ -10,8 +10,8 @@ cleanup() {
 trap cleanup EXIT
 
 # work directory is the root of XGBoost repo
+WORKDIR=`pwd`
 rm -fr build
 pushd jvm-packages
-mvn clean
-mvn package
+mvn -Dmaven.repo.local=$WORKDIR/.m2 clean package
 popd

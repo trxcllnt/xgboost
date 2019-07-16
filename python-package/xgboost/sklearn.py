@@ -105,8 +105,8 @@ class XGBModel(XGBModelBase):
         Value in the data which needs to be present as a missing value. If
         None, defaults to np.nan.
     importance_type: string, default "gain"
-        The feature importance type for the feature_importances_ property: either "gain",
-        "weight", "cover", "total_gain" or "total_cover".
+        The feature importance type for the feature_importances\\_ property:
+        either "gain", "weight", "cover", "total_gain" or "total_cover".
     \\*\\*kwargs : dict, optional
         Keyword arguments for XGBoost Booster object.  Full documentation of parameters can
         be found here: https://github.com/dmlc/xgboost/blob/master/doc/parameter.rst.
@@ -136,11 +136,12 @@ class XGBModel(XGBModelBase):
     """
 
     def __init__(self, max_depth=3, learning_rate=0.1, n_estimators=100,
-                 verbosity=1, silent=None, objective="reg:linear", booster='gbtree',
-                 n_jobs=1, nthread=None, gamma=0, min_child_weight=1,
-                 max_delta_step=0, subsample=1, colsample_bytree=1, colsample_bylevel=1,
-                 colsample_bynode=1, reg_alpha=0, reg_lambda=1, scale_pos_weight=1,
-                 base_score=0.5, random_state=0, seed=None, missing=None,
+                 verbosity=1, silent=None, objective="reg:squarederror",
+                 booster='gbtree', n_jobs=1, nthread=None, gamma=0,
+                 min_child_weight=1, max_delta_step=0, subsample=1,
+                 colsample_bytree=1, colsample_bylevel=1, colsample_bynode=1,
+                 reg_alpha=0, reg_lambda=1, scale_pos_weight=1, base_score=0.5,
+                 random_state=0, seed=None, missing=None,
                  importance_type="gain", **kwargs):
         if not SKLEARN_INSTALLED:
             raise XGBoostError('sklearn needs to be installed in order to use this module')
@@ -377,7 +378,7 @@ class XGBModel(XGBModelBase):
 
         if callable(self.objective):
             obj = _objective_decorator(self.objective)
-            params["objective"] = "reg:linear"
+            params["objective"] = "reg:squarederror"
         else:
             obj = None
 
@@ -430,8 +431,8 @@ class XGBModel(XGBModelBase):
 
         Parameters
         ----------
-        data : DMatrix
-            The dmatrix storing the input.
+        data : numpy.array/scipy.sparse
+            Data to predict with
         output_margin : bool
             Whether to output the raw untransformed margin value.
         ntree_limit : int
@@ -536,7 +537,7 @@ class XGBModel(XGBModelBase):
         feature_importances_ : array of shape ``[n_features]``
 
         """
-        if getattr(self, 'booster', None) is not None and self.booster != 'gbtree':
+        if getattr(self, 'booster', None) is not None and self.booster not in {'gbtree', 'dart'}:
             raise AttributeError('Feature importance is not defined for Booster type {}'
                                  .format(self.booster))
         b = self.get_booster()
@@ -891,7 +892,7 @@ class XGBRFClassifier(XGBClassifier):
                  verbosity=1, silent=None,
                  objective="binary:logistic", n_jobs=1, nthread=None, gamma=0,
                  min_child_weight=1, max_delta_step=0, subsample=0.8, colsample_bytree=1,
-                 colsample_bylevel=1, colsample_bynode=0.8, reg_alpha=0, reg_lambda=1,
+                 colsample_bylevel=1, colsample_bynode=0.8, reg_alpha=0, reg_lambda=1e-5,
                  scale_pos_weight=1, base_score=0.5, random_state=0, seed=None,
                  missing=None, **kwargs):
         super(XGBRFClassifier, self).__init__(
@@ -928,9 +929,9 @@ class XGBRFRegressor(XGBRegressor):
 
     def __init__(self, max_depth=3, learning_rate=1, n_estimators=100,
                  verbosity=1, silent=None,
-                 objective="reg:linear", n_jobs=1, nthread=None, gamma=0,
+                 objective="reg:squarederror", n_jobs=1, nthread=None, gamma=0,
                  min_child_weight=1, max_delta_step=0, subsample=0.8, colsample_bytree=1,
-                 colsample_bylevel=1, colsample_bynode=0.8, reg_alpha=0, reg_lambda=1,
+                 colsample_bylevel=1, colsample_bynode=0.8, reg_alpha=0, reg_lambda=1e-5,
                  scale_pos_weight=1, base_score=0.5, random_state=0, seed=None,
                  missing=None, **kwargs):
         super(XGBRFRegressor, self).__init__(
