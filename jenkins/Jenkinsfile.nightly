@@ -14,8 +14,10 @@ def dockerRun = 'tests/ci_build/ci_build_spark.sh'
 def utils
 
 def buildMatrix = [
-    [ "enabled": true,  "os" : "linux", "withGpu": true, "withNccl": true,  "withOmp": true, "withSpark": true, "cudaVersion": "10.0"],
-    [ "enabled": true,  "os" : "linux", "withGpu": true, "withNccl": true,  "withOmp": true, "withSpark": true, "cudaVersion": "9.2"],
+    [ "enabled": true, "buildCmd": "build_jvm_deploy.sh", "cudaVersion": "10.0", "dockerTarget": "sparkgpu"],
+    [ "enabled": true, "buildCmd": "build_jvm_deploy.sh", "cudaVersion": "9.2", "dockerTarget": "sparkgpu"],
+    [ "enabled": true, "buildCmd": "build_jvm_deploy_centos7.sh", "cudaVersion": "10.0", "dockerTarget": "gpu_centos7"],
+    [ "enabled": true, "buildCmd": "build_jvm_deploy_centos7.sh", "cudaVersion": "9.2", "dockerTarget": "gpu_centos7"],
 ]
 
 pipeline {
@@ -29,7 +31,7 @@ pipeline {
     options {
         ansiColor('xterm')
         timestamps()
-        timeout(time: 120, unit: 'MINUTES')
+        timeout(time: 360, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         gitLabConnection('GitLab Master')
     }
@@ -59,8 +61,10 @@ pipeline {
             steps {
                 script {
                     echo 'run buildFactory'
-                    buildPlatformCmake("sparkgpu", buildMatrix[0], "docker-gpu", "sparkgpu")
-                    buildPlatformCmake("sparkgpu", buildMatrix[1], "docker-gpu", "sparkgpu")
+                    buildPlatformCmake(buildMatrix[0], "docker-gpu")
+                    buildPlatformCmake(buildMatrix[1], "docker-gpu")
+                    buildPlatformCmake(buildMatrix[2], "docker-gpu")
+                    buildPlatformCmake(buildMatrix[3], "docker-gpu")
                 }
             }
         }
@@ -80,18 +84,15 @@ pipeline {
 /**
  * Build platform and test it via cmake.
  */
-def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
+def buildPlatformCmake(conf, nodeReq) {
     // Destination dir for artifacts
     echo 'Begin buildPlatformCmake'
-    def distDir = "dist/${buildName}"
     def dockerArgs = ""
-    def buildCommand = "tests/ci_build/build_jvm_deploy.sh "
-    if (conf["withGpu"]) {
-        dockerArgs = "--build-arg CUDA_VER=" + conf["cudaVersion"]
-        buildCommand = buildCommand + conf["cudaVersion"]
-        echo "build command: ${buildCommand}"
-    }
-    def test_suite = conf["withSpark"] ? "sparkgpu" : (conf["withGpu"] ? (conf["multiGpu"] ? "mgpu" : "gpu") : "cpu")
+    def buildCommand = "tests/ci_build/" + conf["buildCmd"]
+    def dockerTarget = conf["dockerTarget"]
+    dockerArgs = "--build-arg CUDA_VER=" + conf["cudaVersion"]
+    buildCommand = buildCommand + " " + conf["cudaVersion"]
+    echo "build command: ${buildCommand}"
     // Build node - this is returned result
     retry(1) {
         node(nodeReq) {
@@ -99,14 +100,18 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
             echo """
             |===== XGBoost Spark  build =====
             |  dockerTarget: ${dockerTarget}
-            |  distDir   : ${distDir}
-            |  test_suite : ${test_suite}
             |=========================
             """.stripMargin('|')
             // Invoke command inside docker
-            sh """
-            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i ${buildCommand}
-            """
+            if ("${dockerTarget}" == "gpu_centos7") {
+                sh """
+                ${dockerRun} ${dockerTarget} ${dockerArgs} scl enable devtoolset-7 '${buildCommand}'
+                """
+            } else {
+                sh """
+                ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i ${buildCommand}
+                """
+            }
         }
     }
 }
