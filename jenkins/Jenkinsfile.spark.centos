@@ -95,7 +95,7 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
             """.stripMargin('|')
             // Invoke command inside docker
             sh """
-            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm_centos7.sh
+            ${dockerRun} ${dockerTarget} ${dockerArgs} scl enable devtoolset-7 'tests/ci_build/build_jvm_centos7.sh'
             """
         }
     }

@@ -16,9 +16,9 @@ pushd jvm-packages
 mvn clean
 if [ $1 == "10.0" ]; then
     echo "mvn deploy for cuda10.0"
-    mvn -Dmaven.repo.local=$WORKDIR/.m2 package deploy
+    mvn -Dmaven.repo.local=$WORKDIR/.m2.centos7 -Dcudf.classifier=cuda10-centos7 package deploy
 else
     echo "mvn deploy for cuda9.2"
-    mvn -Dmaven.repo.local=$WORKDIR/.m2-9.2 -Dcuda.classifier= package deploy
+    mvn -Dmaven.repo.local=$WORKDIR/.m2-9.2.centos7 -Dcudf.classifier=cuda9-centos7 package deploy
 fi
 popd
