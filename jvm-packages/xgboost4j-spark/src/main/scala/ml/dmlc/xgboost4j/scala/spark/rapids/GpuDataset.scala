@@ -337,7 +337,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
       isSplitable: Boolean,
       maxSplitBytes: Long,
       partitionValues: InternalRow): Seq[PartitionedFile] = {
-    // Currently there is no support for splitting a single file.
+
     if (isSplitable) {
       (0L until file.getLen by maxSplitBytes).map { offset =>
         val remaining = file.getLen - offset
@@ -593,8 +593,9 @@ object GpuDataset {
       } else {
         val parseFunc = csvOptionParserMap.getOrElse(k, (_: CSVOptions.Builder, _: String) => {
           throw new UnsupportedOperationException(s"CSV option $k not supported")
-          parseFunc(builder, v)
         })
+        parseFunc(builder, v)
+
       }
 
 
@@ -670,7 +671,9 @@ object GpuDataset {
     }
   }
 
-  private def readCsvPartFile(conf: Configuration, partFile: PartitionedFile): (HostMemoryBuffer, Long) = {
+
+  private def readCsvPartFile(conf: Configuration, partFile: PartitionedFile):
+    (HostMemoryBuffer, Long) = {
     // use '\n' as line seperator.
     val seperator = Array('\n'.toByte)
     var succeeded = false
