@@ -5,7 +5,7 @@
 */
 
 properties([parameters([
-    choice(name: 'DEPLOY_SERVER', choices: ['Local', 'Sonatype'], description: 'The server where to deploy.'),
+    choice(name: 'DEPLOY_SERVER', choices: ['Local', 'Gpuwa', 'Sonatype'], description: 'The server where to deploy.'),
     booleanParam(name: 'SIGN_JAR', defaultValue: true, description: 'Whether to sign files before deployment'),
     booleanParam(name: 'BUILD_CENTOS7', defaultValue: true, description: 'Whether to enable build for Centos7')
 ])])
