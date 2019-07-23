@@ -31,7 +31,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
-import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile}
+import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile, HadoopFileLinesReader}
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
@@ -338,7 +338,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
       maxSplitBytes: Long,
       partitionValues: InternalRow): Seq[PartitionedFile] = {
     // Currently there is no support for splitting a single file.
-    if (false) {  // if (isSplitable) {
+    if (isSplitable) {
       (0L until file.getLen by maxSplitBytes).map { offset =>
         val remaining = file.getLen - offset
         val size = if (remaining > maxSplitBytes) maxSplitBytes else remaining
@@ -510,19 +510,21 @@ object GpuDataset {
       castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
-    buildCsvOptions(options)
+    buildCsvOptions(options, true) // add virtual "isFirstSplit" for validation.
     val schema = if (castAllToFloats) {
       numericAsFloats(inputSchema)
     } else {
       inputSchema
     }
     (conf: Configuration, partFile: PartitionedFile) => {
-      val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
+      val (dataBuffer, dataSize) = readCsvPartFile(conf, partFile)
       try {
         val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
         schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-        val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options),
+        val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
+          partFile.start == 0),
           dataBuffer, dataSize)
+
         val numColumns = table.getNumberOfColumns
         if (schema.length != numColumns) {
           table.close()
@@ -582,13 +584,20 @@ object GpuDataset {
     }
   }
 
-  private def buildCsvOptions(options: Map[String, String]): CSVOptions = {
+  private def buildCsvOptions(options: Map[String, String], isFirstSplit: Boolean): CSVOptions = {
     val builder = CSVOptions.builder()
     for ((k, v) <- options) {
-      val parseFunc = csvOptionParserMap.getOrElse(k, (_: CSVOptions.Builder, _: String) => {
-        throw new UnsupportedOperationException(s"CSV option $k not supported")
-      })
-      parseFunc(builder, v)
+      // quick fix for CSV file splits. Only the first part of a CSV file has header
+      if (k == "header") {
+        builder.hasHeader(getBool(k, v) && isFirstSplit)
+      } else {
+        val parseFunc = csvOptionParserMap.getOrElse(k, (_: CSVOptions.Builder, _: String) => {
+          throw new UnsupportedOperationException(s"CSV option $k not supported")
+          parseFunc(builder, v)
+        })
+      }
+
+
     }
     builder.build
   }
@@ -639,6 +648,58 @@ object GpuDataset {
       }
     }
     (hmb, totalBytesRead)
+  }
+
+  private def estimatedHostBufferSize(conf: Configuration, partFile: PartitionedFile): Long = {
+    val rawPath = new Path(partFile.filePath)
+    val fs = rawPath.getFileSystem(conf)
+    val path = fs.makeQualified(rawPath)
+    val fileSize = fs.getFileStatus(path).getLen
+    val codecFactory = new CompressionCodecFactory(conf)
+    val codec = codecFactory.getCodec(path)
+    if (codec != null) {
+      // wild guess that compression is 2X or less
+      fileSize * 2
+    } else if (partFile.start + partFile.length == fileSize){
+      // last split doesn't need to read an additional record.
+      // (this PartitionedFile is one complete file)
+      partFile.length
+    } else {
+      // wild guess for extra space needed for the record after the split end offset
+      partFile.length + 128 * 1024
+    }
+  }
+
+  private def readCsvPartFile(conf: Configuration, partFile: PartitionedFile): (HostMemoryBuffer, Long) = {
+    // use '\n' as line seperator.
+    val seperator = Array('\n'.toByte)
+    var succeeded = false
+    var totalSize: Long = 0L
+    var hmb = HostMemoryBuffer.allocate(estimatedHostBufferSize(conf, partFile))
+    try {
+      val lineReader = new HadoopFileLinesReader(partFile, Some(seperator), conf)
+      try {
+        while (lineReader.hasNext) {
+          val line = lineReader.next()
+          val lineSize = line.getLength
+          val newTotal = totalSize + lineSize + seperator.length
+          if (newTotal > hmb.getLength) {
+            hmb = growHostBuffer(hmb, newTotal)
+          }
+          hmb.setBytes(totalSize, line.getBytes, 0, lineSize)
+          hmb.setBytes(totalSize + lineSize, seperator, 0, seperator.length)
+          totalSize = newTotal
+        }
+        succeeded = true
+      } finally {
+        lineReader.close()
+      }
+    } finally {
+      if (!succeeded) {
+        hmb.close()
+      }
+    }
+    (hmb, totalSize)
   }
 
   /**
