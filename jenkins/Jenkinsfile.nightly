@@ -1,4 +1,6 @@
 #!/usr/bin/groovy
+@Library('shared-libs') _
+
 // -*- mode: groovy -*-
 // Jenkins pipeline
 // See documents at https://jenkins.io/doc/book/pipeline/jenkinsfile/
@@ -73,9 +75,12 @@ pipeline {
         always {
             script {
                 def status = "failed"
-                if (currentBuild.currentResult == "SUCCESS")
-                    status = "success"
+                if (currentBuild.currentResult == "SUCCESS") {
+                  status = "success"
+                  slack("#rapidsai-spark-cicd", "Success", color:"#33CC33")
+                }
                 updateGitlabCommitStatus(name: 'Jenkins CI', state: status)
+                slack("#rapidsai-spark-cicd", "Failed", color:"#FF0000")
             }
         }
     }
