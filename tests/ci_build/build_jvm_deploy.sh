@@ -19,6 +19,6 @@ if [ $1 == "10.0" ]; then
     mvn -Dmaven.repo.local=$WORKDIR/.m2 package deploy
 else
     echo "mvn deploy for cuda9.2"
-    mvn -Dmaven.repo.local=$WORKDIR/.m2-9.2 -Dcuda.classifier= package deploy
+    mvn -Dmaven.repo.local=$WORKDIR/.m2-9.2 -Dcudf.classifier= package deploy
 fi
 popd
