@@ -15,8 +15,8 @@
 #
 import sys
 
-from sparkxgb import xgboost
+import sparkxgb
 
 # Allows Pipeline()/PipelineModel() with XGBoost stages to be loaded from disk.
 # Needed because they try to import Python objects from their Java location.
-sys.modules['ml.dmlc.xgboost4j.scala.spark'] = xgboost
+sys.modules['ml.dmlc.xgboost4j.scala.spark'] = sparkxgb

@@ -98,3 +98,9 @@ spark.read.format("libsvm").load("trainingset_libsvm")
 ```
 
 Spark assumes that the dataset is 1-based indexed. However, when you do prediction with other bindings of XGBoost (e.g. Python API of XGBoost), XGBoost assumes that the dataset is 0-based indexed. It creates a pitfall for the users who train model with Spark but predict with the dataset in the same format in other bindings of XGBoost.
+
+## NOTE on Python
+
+There is a Python library for XGBoost4J-Spark under `xgboost4j-spark/src/main/resources`. You may take the xgboost4j-spark jar file as a Python library and develop your code based on it. This solution comes from [here](https://github.com/dmlc/xgboost/pull/4656).
+
+This library supports Python 3.6 and 3.7. [NumPy](https://numpy.org/) is required.

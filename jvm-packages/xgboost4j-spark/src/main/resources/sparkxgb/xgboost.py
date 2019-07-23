@@ -84,8 +84,6 @@ class XGBoostClassifier(XGboostEstimator):
                  weightCol=None):
         super(XGBoostClassifier, self).__init__(classname="ml.dmlc.xgboost4j.scala.spark.XGBoostClassifier")
         kwargs = self._input_kwargs
-        if "reg_lambda" in kwargs:
-            kwargs["lambda"] = kwargs.pop("reg_lambda")
         self.setParams(**kwargs)
 
     @keyword_only
@@ -148,6 +146,8 @@ class XGBoostClassifier(XGboostEstimator):
                   verbosity=1,
                   weightCol=None):
         kwargs = self._input_kwargs
+        if "lambda_" in kwargs:
+            kwargs["lambda"] = kwargs.pop("lambda_")
         return self._set(**kwargs)
 
     def _create_model(self, java_model):
@@ -238,8 +238,6 @@ class XGBoostRegressor(XGboostEstimator):
                  weightCol=None):
         super(XGBoostRegressor, self).__init__(classname="ml.dmlc.xgboost4j.scala.spark.XGBoostRegressor")
         kwargs = self._input_kwargs
-        if "reg_lambda" in kwargs:
-            kwargs["lambda"] = kwargs.pop("reg_lambda")
         self.setParams(**kwargs)
 
     @keyword_only
@@ -303,6 +301,8 @@ class XGBoostRegressor(XGboostEstimator):
                   verbosity=1,
                   weightCol=None):
         kwargs = self._input_kwargs
+        if "lambda_" in kwargs:
+            kwargs["lambda"] = kwargs.pop("lambda_")
         return self._set(**kwargs)
 
     def _create_model(self, java_model):
