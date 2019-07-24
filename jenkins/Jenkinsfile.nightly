@@ -78,13 +78,13 @@ pipeline {
     post {
         always {
             script {
-                def status = "failed"
                 if (currentBuild.currentResult == "SUCCESS") {
-                  status = "success"
-                  slack("#rapidsai-spark-cicd", "Success", color:"#33CC33")
+                    updateGitlabCommitStatus(name: 'Jenkins CI', state: "success")
+                    slack("#rapidsai-spark-cicd", "Success", color: "#33CC33")
+                } else {
+                    updateGitlabCommitStatus(name: 'Jenkins CI', state: "failed")
+                    slack("#rapidsai-spark-cicd", "Failed", color: "#FF0000")
                 }
-                updateGitlabCommitStatus(name: 'Jenkins CI', state: status)
-                slack("#rapidsai-spark-cicd", "Failed", color:"#FF0000")
             }
         }
     }
