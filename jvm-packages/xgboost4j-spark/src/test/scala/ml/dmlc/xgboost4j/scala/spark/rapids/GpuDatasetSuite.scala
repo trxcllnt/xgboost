@@ -248,10 +248,11 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertThrows[UnsupportedOperationException] { ds.repartition(3) }
   }
 
-  // Must set sparkSessionBuilder.master(local[2]) to pass this test
-  // Or need an huge CSV file (> 128 M-bytes) to pass this test.
+
   test(testName = "auto split csv file when loading") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 4 * 1024 * 1024)
     assume(Cuda.isEnvCompatibleForTesting)
+
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/5M.iris.data.csv"))
