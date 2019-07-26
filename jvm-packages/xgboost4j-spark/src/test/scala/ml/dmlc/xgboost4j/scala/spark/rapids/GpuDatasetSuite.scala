@@ -256,7 +256,22 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/5M.iris.data.csv"))
+    dataset.partitions.map{filePart =>
+      println(filePart.files.length)
+    }
     assertResult(2) { dataset.partitions.length }
+  }
+
+  test(testName = "repartition for numPartitions is greater than numPartitionedFiles ") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/5M.iris.data.csv"))
+    val newDataset = dataset.repartition(2)
+    assertResult(2) {newDataset.partitions.length}
+    assertResult(1) {newDataset.partitions(0).files.length}
+    assertResult(true) {
+      newDataset.partitions(1).files(0).start == newDataset.partitions(0).files.length}
   }
 
   private def getTestDataPath(resource: String): String = {

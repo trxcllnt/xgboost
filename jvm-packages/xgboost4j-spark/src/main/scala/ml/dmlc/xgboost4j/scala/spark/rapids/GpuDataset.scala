@@ -18,23 +18,23 @@ package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.util.Locale
 
-import ai.rapids.cudf.{ColumnVector, CSVOptions, DType, HostMemoryBuffer, ParquetOptions, Table}
+import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
 import org.apache.hadoop.io.compress.CompressionCodecFactory
-
 import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
-import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile, HadoopFileLinesReader}
+import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFileLinesReader, HadoopFsRelation, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
+
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
@@ -116,10 +116,23 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     }
 
     // build a list of all input files sorted from largest to smallest
-    val files = partitions.flatMap(_.files).sortBy(_.length)(Ordering[Long].reverse)
-    // Currently do not support splitting files
+    var files = partitions.flatMap(_.files).sortBy(_.length)(Ordering[Long].reverse)
+
     if (files.length < numPartitions) {
-      throw new UnsupportedOperationException("Cannot create more partitions than input files")
+      val totalSize = files.map(_.length).sum
+      val newPartitionSize = totalSize / numPartitions
+      val extraSizeForLastPart = totalSize % numPartitions
+      val lastPartSize = newPartitionSize + extraSizeForLastPart
+      val splitPartFiles = ArrayBuffer[PartitionedFile]()
+      for (file <- files) {
+        // make sure each partfile is smaller than newPartitionSize
+        if (file.length > newPartitionSize) {
+          splitPartFiles ++= splitFileWhenRepartition(file, newPartitionSize)
+        } else {
+          splitPartFiles += file
+        }
+      }
+      files = splitPartFiles.clone()
     }
 
     // Seed the partition buckets with one of the largest files then iterate
@@ -347,6 +360,17 @@ class GpuDataset(fsRelation: HadoopFsRelation,
       }
     } else {
       Seq(getPartitionedFile(file, filePath, partitionValues))
+    }
+  }
+
+  private def splitFileWhenRepartition(partFile: PartitionedFile,
+                                        splitBytes: Long
+                                      ): Seq[PartitionedFile] = {
+    val partFileEnd = partFile.start + partFile.length
+    (partFile.start until partFileEnd by splitBytes).map{ offset =>
+      val remaining = partFileEnd - offset
+      val size = if (remaining > splitBytes) splitBytes else remaining
+      PartitionedFile(partFile.partitionValues, partFile.filePath, offset, size, partFile.locations)
     }
   }
 
