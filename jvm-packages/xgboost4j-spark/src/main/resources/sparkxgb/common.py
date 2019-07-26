@@ -15,7 +15,6 @@
 #
 import re
 
-from pyspark.ml.common import _py2java
 from pyspark.ml.param import Params
 from pyspark.ml.util import _jvm, JavaMLWritable
 from pyspark.ml.wrapper import JavaModel, JavaEstimator
@@ -75,15 +74,12 @@ class XGboostEstimator(JavaEstimator, XGBoostReadable, JavaMLWritable, ParamGett
         return self
 
     def setEvalSets(self, eval_sets):
-        self._java_obj.setEvalSets(
-            _jvm().PythonUtils.toScalaMap(
-                { k: _py2java(None, v) for k, v in eval_sets.items() }))
-        return self
-
-    def setGpuEvalSets(self, gpu_eval_sets):
-        self._java_obj.setGpuEvalSets(
-            _jvm().PythonUtils.toScalaMap(
-                { k: v._java_obj for k, v in gpu_eval_sets.items() }))
+        if eval_sets:
+            is_data_frame = hasattr(list(eval_sets.values())[0], '_jdf')
+            setter = self._java_obj.setEvalSets if is_data_frame else self._java_obj.setGpuEvalSets
+            jvm_eval_sets = _jvm().PythonUtils.toScalaMap(
+                { k: v._jdf if is_data_frame else v._java_obj for k, v in eval_sets.items() })
+            setter(jvm_eval_sets)
         return self
 
     def fit(self, dataset):
