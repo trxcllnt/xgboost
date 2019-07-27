@@ -18,6 +18,7 @@ import re
 from pyspark.ml.param import Params
 from pyspark.ml.util import _jvm, JavaMLWritable
 from pyspark.ml.wrapper import JavaModel, JavaEstimator
+from pyspark.sql import DataFrame
 
 from sparkxgb.util import XGBoostReadable
 
@@ -75,7 +76,7 @@ class XGboostEstimator(JavaEstimator, XGBoostReadable, JavaMLWritable, ParamGett
 
     def setEvalSets(self, eval_sets):
         if eval_sets:
-            is_data_frame = hasattr(list(eval_sets.values())[0], '_jdf')
+            is_data_frame = isinstance(list(eval_sets.values())[0], DataFrame)
             setter = self._java_obj.setEvalSets if is_data_frame else self._java_obj.setGpuEvalSets
             jvm_eval_sets = _jvm().PythonUtils.toScalaMap(
                 { k: v._jdf if is_data_frame else v._java_obj for k, v in eval_sets.items() })
@@ -83,7 +84,7 @@ class XGboostEstimator(JavaEstimator, XGBoostReadable, JavaMLWritable, ParamGett
         return self
 
     def fit(self, dataset):
-        dataset = dataset._java_obj if dataset.__class__.__name__ == 'GpuDataset' else dataset
+        dataset = dataset if isinstance(dataset, DataFrame) else dataset._java_obj
         return super(XGboostEstimator, self).fit(dataset)
 
 
@@ -102,5 +103,5 @@ class XGboostModel(JavaModel, XGBoostReadable, JavaMLWritable, ParamGettersSette
         self._create_param_getters_and_setters()
 
     def transform(self, dataset):
-        dataset = dataset._java_obj if dataset.__class__.__name__ == 'GpuDataset' else dataset
+        dataset = dataset if isinstance(dataset, DataFrame) else dataset._java_obj
         return super(XGboostModel, self).transform(dataset)
