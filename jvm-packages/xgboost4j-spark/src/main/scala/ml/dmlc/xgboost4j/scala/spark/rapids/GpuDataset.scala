@@ -132,7 +132,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
           splitPartFiles += file
         }
       }
-      files = splitPartFiles.clone()
+      files = splitPartFiles
     }
 
     // Seed the partition buckets with one of the largest files then iterate
@@ -368,8 +368,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
                                       ): Seq[PartitionedFile] = {
     val partFileEnd = partFile.start + partFile.length
     (partFile.start until partFileEnd by splitBytes).map{ offset =>
-      val remaining = partFileEnd - offset
-      val size = if (remaining > splitBytes) splitBytes else remaining
+      val size = Math.min(partFileEnd - offset, splitBytes)
       PartitionedFile(partFile.partitionValues, partFile.filePath, offset, size, partFile.locations)
     }
   }
@@ -611,7 +610,6 @@ object GpuDataset {
   private def buildCsvOptions(options: Map[String, String], isFirstSplit: Boolean): CSVOptions = {
     val builder = CSVOptions.builder()
     for ((k, v) <- options) {
-      // quick fix for CSV file splits. Only the first part of a CSV file has header
       if (k == "header") {
         builder.hasHeader(getBool(k, v) && isFirstSplit)
       } else {
@@ -619,10 +617,7 @@ object GpuDataset {
           throw new UnsupportedOperationException(s"CSV option $k not supported")
         })
         parseFunc(builder, v)
-
       }
-
-
     }
     builder.build
   }

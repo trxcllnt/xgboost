@@ -16,6 +16,8 @@
 
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
+import java.io.FileInputStream
+
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import ml.dmlc.xgboost4j.scala.spark.PerTest
@@ -23,6 +25,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
+import org.apache.commons.io.IOUtils
 
 class GpuDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
@@ -237,41 +240,33 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assert(newset.partitions(2).files.contains(partFiles(0)))
   }
 
-
-  // need to remove this after enable csv file splits
-  test("repartition more than number of files") {
-    val oldPartitions = Seq(
-      FilePartition(0, Seq(PartitionedFile(null, "/a/b/c", 0, 123))),
-      FilePartition(1, Seq(PartitionedFile(null, "/a/b/d", 0, 456)))
-    )
-    val ds = new GpuDataset(null, null, null, false, Some(oldPartitions))
-    assertThrows[UnsupportedOperationException] { ds.repartition(3) }
-  }
-
-
   test(testName = "auto split csv file when loading") {
-    ss.conf.set("spark.sql.files.maxPartitionBytes", 4 * 1024 * 1024)
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 30)
     assume(Cuda.isEnvCompatibleForTesting)
 
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
-    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/5M.iris.data.csv"))
-    dataset.partitions.map{filePart =>
-      println(filePart.files.length)
-    }
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.csvsplit.csv"))
     assertResult(2) { dataset.partitions.length }
+    assertResult(50) {dataset.partitions.flatMap(_.files).map(_.length).sum}
+    assertResult(30) {dataset.partitions(0).files(0).length}
+    val firstPartContent = "1,2,3,4,5\n6,7,8,9,10\n11,12,13,"
+    println(firstPartContent.getBytes)
+    val stream = new FileInputStream(dataset.partitions(0).files(0).filePath.drop(7))
+    val bytes = IOUtils.toByteArray(stream, 30)
+    assertResult(firstPartContent.getBytes()) {bytes}
   }
 
-  test(testName = "repartition for numPartitions is greater than numPartitionedFiles ") {
+  test(testName = "repartition for numPartitions is greater than numPartitionedFiles") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
-    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/5M.iris.data.csv"))
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.csvsplit.csv"))
     val newDataset = dataset.repartition(2)
     assertResult(2) {newDataset.partitions.length}
     assertResult(1) {newDataset.partitions(0).files.length}
     assertResult(true) {
-      newDataset.partitions(1).files(0).start == newDataset.partitions(0).files.length}
+      newDataset.partitions(1).files(0).start == newDataset.partitions(0).files(0).length}
   }
 
   private def getTestDataPath(resource: String): String = {
