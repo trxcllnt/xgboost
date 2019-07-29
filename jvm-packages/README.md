@@ -103,4 +103,4 @@ Spark assumes that the dataset is 1-based indexed. However, when you do predicti
 
 There is a Python library for XGBoost4J-Spark under `xgboost4j-spark/src/main/resources`. You may take the xgboost4j-spark jar file as a Python library and develop your code based on it. This solution comes from [here](https://github.com/dmlc/xgboost/pull/4656).
 
-This library supports Python 3.6 and 3.7. [NumPy](https://numpy.org/) is required.
+[NumPy](https://numpy.org/) is required.
