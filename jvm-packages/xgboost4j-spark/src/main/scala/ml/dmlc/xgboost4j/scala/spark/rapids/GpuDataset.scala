@@ -117,9 +117,9 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     }
 
     // build a list of all input files sorted from largest to smallest
-    var files = partitions.flatMap(_.files).sortBy(_.length)(Ordering[Long].reverse)
+    var files = partitions.flatMap(_.files)
 
-    if (files.length < numPartitions) {
+    files = if (files.length < numPartitions) {
       val totalSize = files.map(_.length).sum
       val newPartitionSize = totalSize / numPartitions
       val splitPartFiles = ArrayBuffer[PartitionedFile]()
@@ -131,9 +131,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
           splitPartFiles += file
         }
       }
-      files = splitPartFiles.sortBy(_.length)(Ordering[Long].reverse)
-    }
-
+      splitPartFiles
+    } else {
+      files
+    }.sortBy(_.length)(Ordering[Long].reverse)
 
 
     // Seed the partition buckets with one of the largest files then iterate
