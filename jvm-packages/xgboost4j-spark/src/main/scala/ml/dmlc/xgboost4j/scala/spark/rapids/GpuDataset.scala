@@ -681,7 +681,7 @@ object GpuDataset {
     val codec = codecFactory.getCodec(path)
     if (codec != null) {
       // wild guess that compression is 2X or less
-      fileSize * 2
+      partFile.length * 2
     } else if (partFile.start + partFile.length == fileSize){
       // last split doesn't need to read an additional record.
       // (this PartitionedFile is one complete file)
