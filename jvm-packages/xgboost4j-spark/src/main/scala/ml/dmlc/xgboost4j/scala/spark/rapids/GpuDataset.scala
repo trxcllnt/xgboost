@@ -17,6 +17,7 @@
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.util.Locale
+import java.io.OutputStream
 
 import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
@@ -121,8 +122,6 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     if (files.length < numPartitions) {
       val totalSize = files.map(_.length).sum
       val newPartitionSize = totalSize / numPartitions
-      val extraSizeForLastPart = totalSize % numPartitions
-      val lastPartSize = newPartitionSize + extraSizeForLastPart
       val splitPartFiles = ArrayBuffer[PartitionedFile]()
       for (file <- files) {
         // make sure each partfile is smaller than newPartitionSize
@@ -132,8 +131,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
           splitPartFiles += file
         }
       }
-      files = splitPartFiles
+      files = splitPartFiles.sortBy(_.length)(Ordering[Long].reverse)
     }
+
+
 
     // Seed the partition buckets with one of the largest files then iterate
     // through the rest of the files, adding each to the smallest bucket

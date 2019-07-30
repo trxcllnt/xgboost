@@ -250,14 +250,17 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(2) { dataset.partitions.length }
     assertResult(50) {dataset.partitions.flatMap(_.files).map(_.length).sum}
     assertResult(30) {dataset.partitions(0).files(0).length}
+    assertResult(30) {dataset.partitions(1).files(0).start}
+    assertResult(20) {dataset.partitions(1).files(0).length}
     val firstPartContent = "1,2,3,4,5\n6,7,8,9,10\n11,12,13,"
     // drop "file://" to let InputFile accessible
     var stream = new FileInputStream(dataset.partitions(0).files(0).filePath.drop(7))
-    var bytes = IOUtils.toByteArray(stream, 30)
+    var bytes = IOUtils.toByteArray(stream, dataset.partitions(0).files(0).length)
     assertResult(firstPartContent.getBytes()) {bytes}
     val secondPartContent = "14,15\n16,17,18,19,20"
     stream = new FileInputStream(dataset.partitions(1).files(0).filePath.drop(7))
-    bytes = IOUtils.toByteArray(stream).drop(30)
+    bytes = IOUtils.toByteArray(stream).slice(dataset.partitions(1).files(0).start.toInt,
+      dataset.partitions(1).files(0).length.toInt)
     assertResult(secondPartContent.getBytes()) {bytes}
   }
 
