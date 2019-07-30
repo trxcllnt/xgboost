@@ -18,9 +18,10 @@
 # This module assumes that the user has already called find_package(CUDA)
 
 
-find_path(CUDF_INCLUDE_DIR
-  NAMES cudf.h cudf/types.h
-  PATHS $ENV{CUDF_ROOT}/include ${CUDF_ROOT}/include ${CUDA_INCLUDE_DIRS} /usr/include)
+find_path(CUDF_INCLUDE_DIR "cudf"
+  HINTS "$ENV{CUDF_ROOT}/include"
+        "$ENV{CONDA_PREFIX}/include/cudf"
+        "$ENV{CONDA_PREFIX}/include")
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(CUDF DEFAULT_MSG
