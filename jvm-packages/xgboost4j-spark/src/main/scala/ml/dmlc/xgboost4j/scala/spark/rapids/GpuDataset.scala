@@ -221,6 +221,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     fpath.asInstanceOf[Path]
   }
 
+
+  private def fileTypeSupportSplit(fileType: String): Boolean = {
+    return fileType == "csv"
+  }
   private def getSplits(
       partitions: Seq[PartitionDirectory],
       maxSplitBytes: Long): Seq[PartitionedFile] = {
@@ -234,7 +238,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
             // getPath() is very expensive so we only want to call it once in this block:
             val filePath = file.getPath
             val isSplitable = fsRelation.fileFormat.isSplitable(
-              fsRelation.sparkSession, fsRelation.options, filePath)
+              fsRelation.sparkSession, fsRelation.options, filePath) &&
+              fileTypeSupportSplit(sourceType)
             splitFile(
               file = file,
               filePath = filePath,

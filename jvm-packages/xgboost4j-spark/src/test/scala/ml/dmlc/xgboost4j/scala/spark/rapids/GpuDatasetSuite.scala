@@ -247,20 +247,32 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.csvsplit.csv"))
+    val firstPartFile = dataset.partitions(0).files(0)
+    val secondPartFile = dataset.partitions(1).files(0)
     assertResult(2) { dataset.partitions.length }
     assertResult(50) {dataset.partitions.flatMap(_.files).map(_.length).sum}
-    assertResult(30) {dataset.partitions(0).files(0).length}
-    assertResult(30) {dataset.partitions(1).files(0).start}
-    assertResult(20) {dataset.partitions(1).files(0).length}
-    val firstPartContent = "1,2,3,4,5\n6,7,8,9,10\n11,12,13,"
-    var stream = new URL(dataset.partitions(0).files(0).filePath).openStream()
-    var bytes = IOUtils.toByteArray(stream, dataset.partitions(0).files(0).length)
-    assertResult(firstPartContent.getBytes()) {bytes}
-    val secondPartContent = "14,15\n16,17,18,19,20"
-    stream = new URL(dataset.partitions(1).files(0).filePath).openStream()
-    bytes = IOUtils.toByteArray(stream).slice(dataset.partitions(1).files(0).start.toInt,
-      dataset.partitions(1).files(0).length.toInt + dataset.partitions(1).files(0).start.toInt)
-    assertResult(secondPartContent.getBytes()) {bytes}
+    assertResult(30) {firstPartFile.length}
+    assertResult(30) {secondPartFile.start}
+    assertResult(20) {secondPartFile.length}
+
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong,
+        b.getColumnVector(3).sum().getLong,
+        b.getColumnVector(4).sum().getLong))
+    val counts = rdd.collect
+    assertResult(2) {counts.length}
+    assertResult(1 + 6 + 11) {counts(0)._1}
+    assertResult(2 + 7 + 12) {counts(0)._2}
+    assertResult(3 + 8 + 13) {counts(0)._3}
+    assertResult(4 + 9 + 14 ) {counts(0)._4}
+    assertResult(5 + 10 + 15 ) {counts(0)._5}
+    assertResult(16) {counts(1)._1}
+    assertResult(17) {counts(1)._2}
+    assertResult(18) {counts(1)._3}
+    assertResult(19) {counts(1)._4}
+    assertResult(20) {counts(1)._5}
   }
 
   test(testName = "repartition for numPartitions is greater than numPartitionedFiles") {
@@ -273,6 +285,25 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(1) {newDataset.partitions(0).files.length}
     assertResult(true) {
       newDataset.partitions(1).files(0).start == newDataset.partitions(0).files(0).length}
+
+    val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong,
+        b.getColumnVector(3).sum().getLong,
+        b.getColumnVector(4).sum().getLong))
+    val counts = rdd.collect
+    assertResult(2) {counts.length}
+    assertResult(1 + 6 + 11) {counts(0)._1}
+    assertResult(2 + 7 + 12) {counts(0)._2}
+    assertResult(3 + 8 + 13) {counts(0)._3}
+    assertResult(4 + 9 + 14 ) {counts(0)._4}
+    assertResult(5 + 10 + 15 ) {counts(0)._5}
+    assertResult(16) {counts(1)._1}
+    assertResult(17) {counts(1)._2}
+    assertResult(18) {counts(1)._3}
+    assertResult(19) {counts(1)._4}
+    assertResult(20) {counts(1)._5}
   }
 
   private def getTestDataPath(resource: String): String = {
