@@ -18,14 +18,19 @@ package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.util.Locale
 import java.io.OutputStream
+import java.net.URI
+import java.util.Collections
 
 import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.commons.logging.LogFactory
+import org.apache.commons.io.output.{CountingOutputStream, NullOutputStream}
+import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
-import org.apache.hadoop.io.compress.CompressionCodecFactory
+import org.apache.parquet.bytes.BytesUtils
+import org.apache.parquet.hadoop.metadata.{BlockMetaData, ColumnChunkMetaData, ColumnPath, FileMetaData, ParquetMetadata}
 import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
@@ -34,10 +39,12 @@ import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFileLinesReader, HadoopFsRelation, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.execution.datasources.parquet.{ParquetFilters, ParquetReadSupport}
 import org.apache.spark.unsafe.Platform
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 
 /*
@@ -743,6 +750,82 @@ object GpuDataset {
     }
     result
   }
+
+
+  private def readParquetPartFile(conf: Configuration, partFile: PartitionedFile):
+    (HostMemoryBuffer, Long) = {
+    val filePath = new Path(new URI(partFile.filePath))
+    val in = filePath.getFileSystem(conf).open(filePath)
+    try {
+      var succeeded = false
+      val hmb = HostMemoryBuffer.allocate(calculateParquetOutputSize())
+      try {
+        val out = new HostMemoryBufferOutputStream(hmb)
+        out.write(PARQUET_MAGIC)
+        val outputBlocks = copyClippedBlocksData(in, out)
+        val footerPos = out.getPos
+        writeFooter(out, outputBlocks)
+        BytesUtils.writeIntLittleEndian(out, (out.getPos - footerPos).toInt)
+        out.write(PARQUET_MAGIC)
+        succeeded = true
+        (hmb, out.getPos)
+      } finally {
+        if (!succeeded) {
+          hmb.close()
+        }
+      }
+    } finally {
+      in.close()
+    }
+  }
+
+  private def calculateParquetOutputSize(clippedBlocks: Seq[BlockMetaData]): Long = {
+    // parquet foramt requirements
+    var size: Long = 4 + 4 + 4
+    size += clippedBlocks.map(_.getTotalByteSize).sum
+    // Calculate size of the footer metadata.
+    // This uses the column metadata from the original file, but that should
+    // always be at least as big as the updated metadata in the output.
+    val out = new CountingOutputStream(new NullOutputStream)
+    writeFooter(out, clippedBlocks)
+    size + out.getByteCount
+
+  }
+
+  private[spark] def clipBlocks(columnPaths: Seq[ColumnPath], blocks: Seq[BlockMetaData]):
+    Seq[BlockMetaData] = {
+    val pathSet = columnPaths.toSet
+    blocks.map(oldBlock => {
+      // noinspection ScalaDeprecation
+      val newColumns = oldBlock.getColumns.asScala.filter(c => pathSet.contains(c.getPath))
+      newParquetBlock(oldBlock.getRowCount, newColumns)
+    })
+  }
+
+  private def newParquetBlock(rowCount: Long, columns:
+    Seq[ColumnChunkMetaData]): BlockMetaData = {
+    val block = new BlockMetaData
+    block.setRowCount(rowCount)
+
+    var totalSize: Long = 0
+    for (column <- columns) {
+      block.addColumn(column)
+      totalSize += column.getTotalSize
+    }
+    block.setTotalByteSize(totalSize)
+    block
+  }
+
+
+  private def writeFooter(out: OutputStream, blocks: Seq[BlockMetaData]): Unit = {
+    val fileMeta = new FileMetaData(clippedParquetSchema, Collections.emptyMap[String, String],
+      ParquetPartitionReader.PARQUET_CREATOR)
+    val metadataConverter = new ParquetMetadataConverter
+    val footer = new ParquetMetadata(fileMeta, blocks.asJava)
+    val meta = metadataConverter.toParquetMetadata(ParquetPartitionReader.PARQUET_VERSION, footer)
+    org.apache.parquet.format.Util.writeFileMetaData(meta, out)
+  }
+
 
   private def toDType(dataType: DataType): DType = {
     dataType match {
