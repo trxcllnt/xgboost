@@ -262,7 +262,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getColumnVector(3).sum().getLong,
         b.getColumnVector(4).sum().getLong))
     val counts = rdd.collect
-    assertResult(true) {csvSplitColumnSumVerification(2, counts)}
+    csvSplitColumnSumVerification(counts)
   }
 
   test(testName = "repartition for numPartitions is greater than numPartitionedFiles") {
@@ -283,7 +283,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getColumnVector(3).sum().getLong,
         b.getColumnVector(4).sum().getLong))
     val counts = rdd.collect
-    assertResult(true) {csvSplitColumnSumVerification(2, counts)}
+    csvSplitColumnSumVerification(counts)
   }
 
   private def getTestDataPath(resource: String): String = {
@@ -292,29 +292,18 @@ class GpuDatasetSuite extends FunSuite with PerTest {
   }
 
 
-  private def csvSplitColumnSumVerification(numPartitions: Int,
-                                            counts: Array[(Long, Long, Long, Long, Long)]):
-    Boolean = {
-    var result: Boolean = false
-    if (counts.length != numPartitions) {
-      result
-    } else {
-      result = if (
-        counts(0)._1 == 1 + 6 + 11 &&
-          counts(0)._2 == 2 + 7 + 12 &&
-          counts(0)._3 == 3 + 8 + 13 &&
-          counts(0)._4 == 4 + 9 + 14 &&
-          counts(0)._5 == 5 + 10 + 15 &&
-          counts(1)._1 == 16 &&
-          counts(1)._2 == 17 &&
-          counts(1)._3 == 18 &&
-          counts(1)._4 == 19 &&
-          counts(1)._5 == 20) {
-        true
-      } else {
-        false
-      }
-      result
-    }
+  private def csvSplitColumnSumVerification(counts: Array[(Long, Long, Long, Long, Long)]):
+    Unit = {
+    assertResult(2) {counts.length}
+    assertResult(1 + 6 + 11) {counts(0)._1}
+    assertResult(2 + 7 + 12) {counts(0)._2}
+    assertResult(3 + 8 + 13) {counts(0)._3}
+    assertResult(4 + 9 + 14 ) {counts(0)._4}
+    assertResult(5 + 10 + 15 ) {counts(0)._5}
+    assertResult(16) {counts(1)._1}
+    assertResult(17) {counts(1)._2}
+    assertResult(18) {counts(1)._3}
+    assertResult(19) {counts(1)._4}
+    assertResult(20) {counts(1)._5}
   }
 }
