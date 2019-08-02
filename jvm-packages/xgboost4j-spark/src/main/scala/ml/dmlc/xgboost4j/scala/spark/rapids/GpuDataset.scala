@@ -767,9 +767,7 @@ object GpuDataset {
     val fileSchema = footer.getFileMetaData.getSchema
     val pushedFilters = None
     val blocks = footer.getBlocks.asScala
-//    val clippedSchema = fileSchema
     val columnPath = fileSchema.getPaths.asScala.map(x => ColumnPath.get(x: _*))
-//    val clippedBlocks = blocks
 
     val in = filePath.getFileSystem(conf).open(filePath)
     try {
