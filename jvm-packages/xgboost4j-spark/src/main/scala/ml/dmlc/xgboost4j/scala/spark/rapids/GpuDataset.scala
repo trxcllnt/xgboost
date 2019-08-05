@@ -17,7 +17,6 @@
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.util.Locale
-import java.io.OutputStream
 
 import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
@@ -374,7 +373,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
                                         splitBytes: Long
                                       ): Seq[PartitionedFile] = {
     val partFileEnd = partFile.start + partFile.length
-    (partFile.start until partFileEnd by splitBytes).map{ offset =>
+    (partFile.start until partFileEnd by splitBytes).map { offset =>
       val size = Math.min(partFileEnd - offset, splitBytes)
       PartitionedFile(partFile.partitionValues, partFile.filePath, offset, size, partFile.locations)
     }

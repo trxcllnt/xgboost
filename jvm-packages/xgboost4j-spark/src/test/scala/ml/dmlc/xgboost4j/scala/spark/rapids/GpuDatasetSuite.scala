@@ -16,7 +16,6 @@
 
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
-import java.net.URL
 
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
@@ -25,7 +24,6 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
-import org.apache.commons.io.IOUtils
 
 class GpuDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
