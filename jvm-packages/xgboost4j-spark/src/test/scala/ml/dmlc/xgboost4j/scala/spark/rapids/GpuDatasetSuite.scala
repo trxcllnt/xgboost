@@ -284,18 +284,24 @@ class GpuDatasetSuite extends FunSuite with PerTest {
 
 
   test("auto split when loading parquet file") {
-    ss.conf.set("spark.sql.files.maxPartitionBytes", 1000)
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 3000)
     assume(Cuda.isEnvCompatibleForTesting)
 
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
-    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.parquetsplit"))
+    val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
     println(dataset.partitions.length)
     println(dataset.partitions(0).files.length)
     println(dataset.partitions(0).files(0).filePath)
     println(dataset.partitions(0).files(0).length)
     println(dataset.partitions(0).files(0).start)
-
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong,
+        b.getColumnVector(3).sum().getLong,
+        b.getColumnVector(4).sum().getLong))
+    val counts = rdd.collect
   }
 
   private def getTestDataPath(resource: String): String = {

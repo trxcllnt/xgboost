@@ -20,6 +20,7 @@ import java.util.Locale
 import java.io.OutputStream
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.nio.file.FileAlreadyExistsException
 import java.util.Collections
 
 import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
@@ -30,7 +31,7 @@ import org.apache.commons.logging.LogFactory
 import org.apache.commons.io.output.{CountingOutputStream, NullOutputStream}
 import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{BlockLocation, FSDataInputStream, FileStatus, LocatedFileStatus, Path}
+import org.apache.hadoop.fs.{BlockLocation, FSDataInputStream, FileStatus, LocatedFileStatus, Path, FSDataOutputStream}
 import org.apache.parquet.bytes.BytesUtils
 import org.apache.parquet.format.converter.ParquetMetadataConverter
 import org.apache.parquet.hadoop.ParquetFileReader
@@ -50,6 +51,8 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
+import scala.util.Random
+
 
 /*
  * Note on compatibility with different versions of Spark:
@@ -584,6 +587,9 @@ object GpuDataset {
 
     (conf: Configuration, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readParquetPartFile(conf, partFile)
+
+      val prefix = "file:/home/allen/temp/parquet"
+      dumpParquetData(prefix, dataBuffer, dataSize, conf)
       try {
         val parquetOptions = buildParquetOptions(options, schema)
         var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
@@ -765,9 +771,7 @@ object GpuDataset {
     val footer = ParquetFileReader.readFooter(conf, filePath,
       ParquetMetadataConverter.range(partFile.start, partFile.start + partFile.length))
     val fileSchema = footer.getFileMetaData.getSchema
-    val pushedFilters = None
     val blocks = footer.getBlocks.asScala
-    val columnPath = fileSchema.getPaths.asScala.map(x => ColumnPath.get(x: _*))
 
     val in = filePath.getFileSystem(conf).open(filePath)
     try {
@@ -861,8 +865,8 @@ object GpuDataset {
   }
 
 
-  private def newParquetBlock(rowCount: Long, columns:
-    Seq[ColumnChunkMetaData]): BlockMetaData = {
+  private def newParquetBlock(rowCount: Long,
+                              columns: Seq[ColumnChunkMetaData]): BlockMetaData = {
     val block = new BlockMetaData
     block.setRowCount(rowCount)
 
@@ -927,6 +931,49 @@ object GpuDataset {
     }
 
     def getPos: Long = pos
+  }
+
+
+  private def dumpParquetData(
+                               dumpPathPrefix: String,
+                               hmb: HostMemoryBuffer,
+                               dataLength: Long,
+                               conf: Configuration): Unit = {
+    val (out, path) = createTempFile(conf, dumpPathPrefix)
+    try {
+      logger.info(s"Writing Parquet split data to $path")
+      val buffer = new Array[Byte](128 * 1024)
+      var pos = 0
+      while (pos < dataLength) {
+        // downcast is safe because buffer.length is an int
+        val readLength = Math.min(dataLength - pos, buffer.length).toInt
+        hmb.getBytes(buffer, 0, pos, readLength)
+        out.write(buffer, 0, readLength)
+        pos += readLength
+      }
+    } finally {
+      out.close()
+    }
+  }
+
+  private def createTempFile(
+                              conf: Configuration,
+                              pathPrefix: String): (FSDataOutputStream, Path) = {
+    val fs = new Path(pathPrefix).getFileSystem(conf)
+    val rnd = new Random
+    var out: FSDataOutputStream = null
+    var path: Path = null
+    var succeeded = false
+    while (!succeeded) {
+      path = new Path(pathPrefix + rnd.nextInt(Integer.MAX_VALUE) + ".parquet")
+      if (!fs.exists(path)) {
+        scala.util.control.Exception.ignoring(classOf[FileAlreadyExistsException]) {
+          out = fs.create(path, false)
+          succeeded = true
+        }
+      }
+    }
+    (out, path)
   }
 
 
