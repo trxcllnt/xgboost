@@ -40,7 +40,7 @@ pipeline {
 
     parameters {
         string(name: 'REF', defaultValue: 'nv-cudf-interop', description: 'Commit to build')
-        booleanParam(name: 'BUILD_CENTOS7', defaultValue: false, description: 'Whether to enable build for Centos7')
+        booleanParam(name: 'BUILD_CENTOS7', defaultValue: true, description: 'Whether to enable build for Centos7')
     }
 
     triggers {
