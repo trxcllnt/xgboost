@@ -131,6 +131,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
   }
 
   test("Parquet parsing") {
+    // this test will fail with "double free or corruption (!prev)"
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(TRAIN_PARQUET_PATH)
