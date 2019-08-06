@@ -16,7 +16,6 @@
 
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
-import java.net.URL
 
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
@@ -25,7 +24,6 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
-import org.apache.commons.io.IOUtils
 
 class GpuDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
@@ -248,9 +246,14 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.csvsplit.csv"))
+    val firstPartFile = dataset.partitions(0).files(0)
+    val secondPartFile = dataset.partitions(1).files(0)
     assertResult(2) { dataset.partitions.length }
     assertResult(50) {dataset.partitions.flatMap(_.files).map(_.length).sum}
 
+    assertResult(30) {firstPartFile.length}
+    assertResult(30) {secondPartFile.start}
+    assertResult(20) {secondPartFile.length}
 
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(b.getColumnVector(0).sum().getLong,
@@ -273,6 +276,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(1) {newDataset.partitions(0).files.length}
     assertResult(true) {
       newDataset.partitions(1).files(0).start == newDataset.partitions(0).files(0).length}
+
     val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(b.getColumnVector(0).sum().getLong,
         b.getColumnVector(1).sum().getLong,
@@ -282,6 +286,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val counts = rdd.collect
     csvSplitColumnSumVerification(counts)
   }
+
 
 
   test("auto split when loading parquet file") {
@@ -301,10 +306,49 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getNumColumns, b.getNumRows
       ))
     val counts = rdd.collect
-//    assertResult(1) { counts.length }
-//    assertResult(5) { counts(0)._1 }
-//    assertResult(149) { counts(0)._2 }
+    //    assertResult(1) { counts.length }
+    //    assertResult(5) { counts(0)._1 }
+    //    assertResult(149) { counts(0)._2 }
   }
+
+  test("csv split when numPartitions is greater than numRows") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 3)
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
+
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong))
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(1) {counts(0)_1}
+    assertResult(2) {counts(0)_2}
+    assertResult(3) {counts(0)_3}
+  }
+
+  test("csv repartition when numPartitions is greater than total bytes") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
+    val newDataset = dataset.repartition(10)
+
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong))
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(1) {counts(0)_1}
+    assertResult(2) {counts(0)_2}
+    assertResult(3) {counts(0)_3}
+  }
+
+
+
 
   private def getTestDataPath(resource: String): String = {
     require(resource.startsWith("/"), "resource must start with /")
@@ -326,5 +370,4 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(19) {counts(1)._4}
     assertResult(20) {counts(1)._5}
   }
-
 }

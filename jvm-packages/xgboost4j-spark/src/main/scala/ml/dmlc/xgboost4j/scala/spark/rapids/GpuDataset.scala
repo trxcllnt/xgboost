@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
 import java.util.Collections
 
+
 import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
@@ -131,11 +132,16 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     }
 
     // build a list of all input files sorted from largest to smallest
-    var files = partitions.flatMap(_.files).sortBy(_.length)(Ordering[Long].reverse)
-
-    if (files.length < numPartitions) {
+    var files = partitions.flatMap(_.files)
+    var permitNumPartitions = numPartitions
+    files = if (files.length < numPartitions) {
       val totalSize = files.map(_.length).sum
-      val newPartitionSize = totalSize / numPartitions
+      var newPartitionSize = totalSize / numPartitions
+      if (newPartitionSize < 1) {
+        // to handle corner case
+        newPartitionSize = 1
+        permitNumPartitions = totalSize.toInt
+      }
       val splitPartFiles = ArrayBuffer[PartitionedFile]()
       for (file <- files) {
         // make sure each partfile is smaller than newPartitionSize
@@ -145,17 +151,18 @@ class GpuDataset(fsRelation: HadoopFsRelation,
           splitPartFiles += file
         }
       }
-      files = splitPartFiles.sortBy(_.length)(Ordering[Long].reverse)
-    }
-
+      splitPartFiles
+    } else {
+      files
+    }.sortBy(_.length)(Ordering[Long].reverse)
 
 
     // Seed the partition buckets with one of the largest files then iterate
     // through the rest of the files, adding each to the smallest bucket
-    val buckets = files.take(numPartitions).map(new GpuDataset.PartBucket(_))
+    val buckets = files.take(permitNumPartitions).map(new GpuDataset.PartBucket(_))
     def bucketOrder(b: GpuDataset.PartBucket) = -b.getSize
     val queue = mutable.PriorityQueue(buckets: _*)(Ordering.by(bucketOrder))
-    for (file <- files.drop(numPartitions)) {
+    for (file <- files.drop(permitNumPartitions)) {
       val bucket = queue.dequeue()
       bucket.addFile(file)
       queue.enqueue(bucket)
@@ -234,6 +241,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     fpath.asInstanceOf[Path]
   }
 
+
+  private def fileTypeSupportSplit(fileType: String): Boolean = {
+    return fileType == "csv"
+  }
   private def getSplits(
       partitions: Seq[PartitionDirectory],
       maxSplitBytes: Long): Seq[PartitionedFile] = {
@@ -247,7 +258,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
             // getPath() is very expensive so we only want to call it once in this block:
             val filePath = file.getPath
             val isSplitable = fsRelation.fileFormat.isSplitable(
-              fsRelation.sparkSession, fsRelation.options, filePath)
+              fsRelation.sparkSession, fsRelation.options, filePath) &&
+              fileTypeSupportSplit(sourceType)
             splitFile(
               file = file,
               filePath = filePath,
@@ -382,7 +394,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
                                         splitBytes: Long
                                       ): Seq[PartitionedFile] = {
     val partFileEnd = partFile.start + partFile.length
-    (partFile.start until partFileEnd by splitBytes).map{ offset =>
+    (partFile.start until partFileEnd by splitBytes).map { offset =>
       val size = Math.min(partFileEnd - offset, splitBytes)
       PartitionedFile(partFile.partitionValues, partFile.filePath, offset, size, partFile.locations)
     }
@@ -557,19 +569,25 @@ object GpuDataset {
     (conf: Configuration, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readCsvPartFile(conf, partFile)
       try {
-        val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
-        schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-        val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
-          partFile.start == 0),
-          dataBuffer, dataSize)
 
-        val numColumns = table.getNumberOfColumns
-        if (schema.length != numColumns) {
-          table.close()
-          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+        if (dataSize == 0) {
+          None
+        } else {
+          val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
+          schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
+          val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
+            partFile.start == 0),
+            dataBuffer, dataSize)
+
+          val numColumns = table.getNumberOfColumns
+          if (schema.length != numColumns) {
+            table.close()
+            throw new QueryExecutionException(s"Expected ${schema.length} columns " +
               s"but only read ${table.getNumberOfColumns} from $partFile")
+          }
+          Some(table)
         }
-        Some(table)
+
       } finally {
         dataBuffer.close()
       }
@@ -700,7 +718,7 @@ object GpuDataset {
     val codec = codecFactory.getCodec(path)
     if (codec != null) {
       // wild guess that compression is 2X or less
-      fileSize * 2
+      partFile.length * 2
     } else if (partFile.start + partFile.length == fileSize){
       // last split doesn't need to read an additional record.
       // (this PartitionedFile is one complete file)
