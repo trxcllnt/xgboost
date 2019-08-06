@@ -117,10 +117,15 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
     // build a list of all input files sorted from largest to smallest
     var files = partitions.flatMap(_.files)
-
+    var permitNumPartitions = numPartitions
     files = if (files.length < numPartitions) {
       val totalSize = files.map(_.length).sum
-      val newPartitionSize = totalSize / numPartitions
+      var newPartitionSize = totalSize / numPartitions
+      if (newPartitionSize < 1) {
+        // to handle corner case
+        newPartitionSize = 1
+        permitNumPartitions = totalSize.toInt
+      }
       val splitPartFiles = ArrayBuffer[PartitionedFile]()
       for (file <- files) {
         // make sure each partfile is smaller than newPartitionSize
@@ -138,10 +143,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
     // Seed the partition buckets with one of the largest files then iterate
     // through the rest of the files, adding each to the smallest bucket
-    val buckets = files.take(numPartitions).map(new GpuDataset.PartBucket(_))
+    val buckets = files.take(permitNumPartitions).map(new GpuDataset.PartBucket(_))
     def bucketOrder(b: GpuDataset.PartBucket) = -b.getSize
     val queue = mutable.PriorityQueue(buckets: _*)(Ordering.by(bucketOrder))
-    for (file <- files.drop(numPartitions)) {
+    for (file <- files.drop(permitNumPartitions)) {
       val bucket = queue.dequeue()
       bucket.addFile(file)
       queue.enqueue(bucket)
@@ -523,7 +528,7 @@ object GpuDataset {
         sourceType: String,
         schema: StructType,
         options: Map[String, String],
-        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
+        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
     sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
       case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
@@ -536,7 +541,7 @@ object GpuDataset {
       sparkSession: SparkSession,
       inputSchema: StructType,
       options: Map[String, String],
-      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
+      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
     buildCsvOptions(options, true) // add virtual "isFirstSplit" for validation.
@@ -548,19 +553,24 @@ object GpuDataset {
     (conf: Configuration, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readCsvPartFile(conf, partFile)
       try {
-        val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
-        schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-        val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
-          partFile.start == 0),
-          dataBuffer, dataSize)
 
-        val numColumns = table.getNumberOfColumns
-        if (schema.length != numColumns) {
-          table.close()
-          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+        if (dataSize == 0) {
+          None
+        } else {
+          val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
+          schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
+          val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
+            partFile.start == 0),
+            dataBuffer, dataSize)
+
+          val numColumns = table.getNumberOfColumns
+          if (schema.length != numColumns) {
+            table.close()
+            throw new QueryExecutionException(s"Expected ${schema.length} columns " +
               s"but only read ${table.getNumberOfColumns} from $partFile")
+          }
+          Some(table)
         }
-        table
       } finally {
         dataBuffer.close()
       }
@@ -571,7 +581,7 @@ object GpuDataset {
       sparkSession: SparkSession,
       schema: StructType,
       options: Map[String, String],
-      castToFloat: Boolean): (Configuration, PartitionedFile) => Table = {
+      castToFloat: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
     // Try to build Parquet options on the driver here to validate and fail fast.
     // The other Parquet option build below will occur on the executors.
     buildParquetOptions(options, schema)
@@ -606,7 +616,7 @@ object GpuDataset {
             columns.foreach(v => if (v != null) v.close())
           }
         }
-        table
+        Some(table)
       } finally {
         dataBuffer.close()
       }

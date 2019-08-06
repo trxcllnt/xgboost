@@ -285,23 +285,43 @@ class GpuDatasetSuite extends FunSuite with PerTest {
   }
 
 
-  test("split fail when numPartitions is greater than numRows") {
+  test("csv split when numPartitions is greater than numRows") {
     ss.conf.set("spark.sql.files.maxPartitionBytes", 3)
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
-    val firstPartFile = dataset.partitions(0).files(0)
-    val secondPartFile = dataset.partitions(1).files(0)
-    assertResult(2) {dataset.partitions.length}
-    assertResult(3) {firstPartFile.length}
-    assertResult(2) {secondPartFile.length}
+
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(b.getColumnVector(0).sum().getLong,
         b.getColumnVector(1).sum().getLong,
         b.getColumnVector(2).sum().getLong))
     val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(1) {counts(0)_1}
+    assertResult(2) {counts(0)_2}
+    assertResult(3) {counts(0)_3}
   }
+
+  test("csv repartition when numPartitions is greater than total bytes") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
+    val newDataset = dataset.repartition(10)
+
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong))
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(1) {counts(0)_1}
+    assertResult(2) {counts(0)_2}
+    assertResult(3) {counts(0)_3}
+  }
+
+
 
 
   private def getTestDataPath(resource: String): String = {
