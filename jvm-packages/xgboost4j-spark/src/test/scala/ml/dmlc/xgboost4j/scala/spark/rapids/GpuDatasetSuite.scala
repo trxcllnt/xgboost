@@ -284,6 +284,26 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     csvSplitColumnSumVerification(counts)
   }
 
+
+  test("split fail when numPartitions is greater than numRows") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 3)
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
+    val firstPartFile = dataset.partitions(0).files(0)
+    val secondPartFile = dataset.partitions(1).files(0)
+    assertResult(2) {dataset.partitions.length}
+    assertResult(3) {firstPartFile.length}
+    assertResult(2) {secondPartFile.length}
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong))
+    val counts = rdd.collect
+  }
+
+
   private def getTestDataPath(resource: String): String = {
     require(resource.startsWith("/"), "resource must start with /")
     getClass.getResource(resource).getPath
