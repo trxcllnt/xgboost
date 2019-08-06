@@ -35,11 +35,11 @@ import org.apache.spark.sql.types.StructType
 import scala.collection.mutable.ArrayBuffer
 
 private[spark] class GpuDatasetRDD(
-                                    @transient private val sparkSession: SparkSession,
-                                    broadcastedConf: Broadcast[SerializableWritable[Configuration]],
-                                    readFunction: (Configuration, PartitionedFile) => Option[Table with AutoCloseable],
-                                    @transient val filePartitions: Seq[FilePartition],
-                                    schema: StructType)
+    @transient private val sparkSession: SparkSession,
+    broadcastedConf: Broadcast[SerializableWritable[Configuration]],
+    readFunction: (Configuration, PartitionedFile) => Option[Table with AutoCloseable],
+    @transient val filePartitions: Seq[FilePartition],
+    schema: StructType)
   extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
 
   private val logger = LogFactory.getLog(classOf[GpuDatasetRDD])
@@ -49,11 +49,9 @@ private[spark] class GpuDatasetRDD(
     val conf: Configuration = broadcastedConf.value.value
     val iterator = new Iterator[GpuColumnBatch] with AutoCloseable {
       private[this] var batchedTable = GpuDatasetRDD.buildBatch(conf, readFunction,
-        split.asInstanceOf[FilePartition].files)
+          split.asInstanceOf[FilePartition].files)
       private[this] var resultBatch: Option[GpuColumnBatch] =
-        batchedTable.map({
-          new GpuColumnBatch(_, schema)
-        })
+          batchedTable.map({ new GpuColumnBatch(_, schema) })
 
       override def hasNext: Boolean = resultBatch.isDefined
 
@@ -63,9 +61,7 @@ private[spark] class GpuDatasetRDD(
         batch
       }
 
-      override def close(): Unit = batchedTable.foreach({
-        _.close()
-      })
+      override def close(): Unit = batchedTable.foreach({ _.close() })
     }
 
     // Register an on-task-completion callback to close the input stream.
@@ -111,52 +107,36 @@ private[spark] object GpuDatasetRDD {
       return result
     }
 
-    val tables = new Array[Table](partfiles.length)
-    val notNullTables = ArrayBuffer[Table]()
-    var tableCounts = 0
+    val tables = ArrayBuffer[Table]()
     try {
       for ((partfile, i) <- partfiles.zipWithIndex) {
         readPartFile(conf, readFunc, partfile) match {
           case Some(table) => {
-            tables(i) = table
-            tableCounts += 1
+            tables.append(table)
+//            tableCounts += 1
           }
           case None => {
-            // leave tables(i) null
+            // do nothing
           }
         }
       }
-      if (tableCounts == 0) {
-        result = None
+      result = if (tables.length > 1) {
+        Some(Table.concatenate(tables: _*))
+      } else if (tables.length == 1){
+        Some(tables.remove(0))
       } else {
-        tables.map { table => {
-          if (table != null) {
-            notNullTables.append(table)
-          }
-        }
-        }
-        // Table.concatenate doesn't accpet `null`
-        result = Some(if (tableCounts > 1) {
-          Table.concatenate(notNullTables: _*)
-        } else {
-          notNullTables(0)
-        })
+        None
       }
-
     } finally {
-      if (tableCounts > 1) {
-        for (table <- notNullTables if table != null) {
-          table.close()
-        }
-      }
+      tables.foreach(_.close())
     }
     result
   }
 
   private def readPartFile(
-                            conf: Configuration,
-                            readFunc: (Configuration, PartitionedFile) => Option[Table],
-                            partfile: PartitionedFile): Option[Table] = {
+      conf: Configuration,
+      readFunc: (Configuration, PartitionedFile) => Option[Table],
+      partfile: PartitionedFile): Option[Table] = {
     try {
       readFunc(conf, partfile)
     } catch {
@@ -169,14 +149,14 @@ private[spark] object GpuDatasetRDD {
             "by recreating the Dataset/DataFrame involved.")
       case e: SchemaColumnConvertNotSupportedException =>
         val message = "Parquet column cannot be converted in " +
-          s"file ${partfile.filePath}. Column: ${e.getColumn}, " +
-          s"Expected: ${e.getLogicalType}, Found: ${e.getPhysicalType}"
+            s"file ${partfile.filePath}. Column: ${e.getColumn}, " +
+            s"Expected: ${e.getLogicalType}, Found: ${e.getPhysicalType}"
         throw new QueryExecutionException(message, e)
       case e: ParquetDecodingException =>
         if (e.getMessage.contains("Can not read value at")) {
           val message = "Encounter error while reading parquet files. " +
-            "One possible cause: Parquet column cannot be converted in the " +
-            "corresponding files. Details: "
+              "One possible cause: Parquet column cannot be converted in the " +
+              "corresponding files. Details: "
           throw new QueryExecutionException(message, e)
         }
         throw e
