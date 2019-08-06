@@ -296,19 +296,33 @@ class GpuDatasetSuite extends FunSuite with PerTest {
 
     val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
-    println(dataset.partitions.length)
-    println(dataset.partitions(0).files.length)
-    println(dataset.partitions(0).files(0).filePath)
-    println(dataset.partitions(0).files(0).length)
-    println(dataset.partitions(0).files(0).start)
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(
         b.getNumColumns, b.getNumRows
       ))
     val counts = rdd.collect
-    //    assertResult(1) { counts.length }
-    //    assertResult(5) { counts(0)._1 }
-    //    assertResult(149) { counts(0)._2 }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
+  }
+
+  test("Parquet repartition when numPartitions is greater than numPartitionedFile") {
+    assume(Cuda.isEnvCompatibleForTesting)
+
+
+    val reader = new GpuDataReader(ss)
+    val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
+    assertResult(1) {dataset.partitions.length}
+    val newDataset = dataset.repartition(2)
+    assertResult(2) {newDataset.partitions.length}
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(
+        b.getNumColumns, b.getNumRows
+      ))
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(5) {counts(0)._1}
+    assertResult(149) { counts(0)._2 }
   }
 
   test("csv split when numPartitions is greater than numRows") {
