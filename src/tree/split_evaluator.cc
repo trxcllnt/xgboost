@@ -43,8 +43,7 @@ SplitEvaluator* SplitEvaluator::Create(const std::string& name) {
 }
 
 // Default implementations of some virtual methods that aren't always needed
-void SplitEvaluator::Init(
-    const std::vector<std::pair<std::string, std::string> >& args) {}
+void SplitEvaluator::Init(const Args& args) {}
 void SplitEvaluator::Reset() {}
 void SplitEvaluator::AddSplit(bst_uint nodeid,
                               bst_uint leftid,
@@ -104,8 +103,7 @@ class ElasticNet final : public SplitEvaluator {
       LOG(FATAL) << "ElasticNet does not accept an inner SplitEvaluator";
     }
   }
-  void Init(
-      const std::vector<std::pair<std::string, std::string> >& args) override {
+  void Init(const Args& args) override {
     params_.InitAllowUnknown(args);
   }
 
@@ -210,7 +208,7 @@ class MonotonicConstraint final : public SplitEvaluator {
     inner_ = std::move(inner);
   }
 
-  void Init(const std::vector<std::pair<std::string, std::string> >& args)
+  void Init(const Args& args)
       override {
     inner_->Init(args);
     params_.InitAllowUnknown(args);
@@ -283,7 +281,9 @@ class MonotonicConstraint final : public SplitEvaluator {
                 bst_float leftweight,
                 bst_float rightweight) override {
     inner_->AddSplit(nodeid, leftid, rightid, featureid, leftweight, rightweight);
-    bst_uint newsize = std::max(leftid, rightid) + 1;
+
+    bst_uint newsize = std::max(bst_uint(lower_.size()), bst_uint(std::max(leftid, rightid) + 1u));
+
     lower_.resize(newsize);
     upper_.resize(newsize);
     bst_int constraint = GetConstraint(featureid);
@@ -367,7 +367,7 @@ class InteractionConstraint final : public SplitEvaluator {
     inner_ = std::move(inner);
   }
 
-  void Init(const std::vector<std::pair<std::string, std::string> >& args)
+  void Init(const Args& args)
       override {
     inner_->Init(args);
     params_.InitAllowUnknown(args);
