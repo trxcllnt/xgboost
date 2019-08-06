@@ -288,8 +288,8 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     ss.conf.set("spark.sql.files.maxPartitionBytes", 3000)
     assume(Cuda.isEnvCompatibleForTesting)
 
+
     val reader = new GpuDataReader(ss)
-    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
     val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
     println(dataset.partitions.length)
     println(dataset.partitions(0).files.length)
@@ -297,12 +297,13 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     println(dataset.partitions(0).files(0).length)
     println(dataset.partitions(0).files(0).start)
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
-      Iterator.single(b.getColumnVector(0).sum().getLong,
-        b.getColumnVector(1).sum().getLong,
-        b.getColumnVector(2).sum().getLong,
-        b.getColumnVector(3).sum().getLong,
-        b.getColumnVector(4).sum().getLong))
+      Iterator.single(
+        b.getNumColumns, b.getNumRows
+      ))
     val counts = rdd.collect
+//    assertResult(1) { counts.length }
+//    assertResult(5) { counts(0)._1 }
+//    assertResult(149) { counts(0)._2 }
   }
 
   private def getTestDataPath(resource: String): String = {

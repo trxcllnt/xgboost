@@ -532,7 +532,7 @@ object GpuDataset {
         sourceType: String,
         schema: StructType,
         options: Map[String, String],
-        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
+        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
     sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
       case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
@@ -545,7 +545,7 @@ object GpuDataset {
       sparkSession: SparkSession,
       inputSchema: StructType,
       options: Map[String, String],
-      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
+      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
     buildCsvOptions(options, true) // add virtual "isFirstSplit" for validation.
@@ -569,7 +569,7 @@ object GpuDataset {
           throw new QueryExecutionException(s"Expected ${schema.length} columns " +
               s"but only read ${table.getNumberOfColumns} from $partFile")
         }
-        table
+        Some(table)
       } finally {
         dataBuffer.close()
       }
@@ -580,45 +580,48 @@ object GpuDataset {
       sparkSession: SparkSession,
       schema: StructType,
       options: Map[String, String],
-      castToFloat: Boolean): (Configuration, PartitionedFile) => Table = {
+      castToFloat: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
     // Try to build Parquet options on the driver here to validate and fail fast.
     // The other Parquet option build below will occur on the executors.
     buildParquetOptions(options, schema)
 
     (conf: Configuration, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readParquetPartFile(conf, partFile)
-
-      val prefix = "file:/home/allen/temp/parquet"
-      dumpParquetData(prefix, dataBuffer, dataSize, conf)
       try {
-        val parquetOptions = buildParquetOptions(options, schema)
-        var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
-        val numColumns = table.getNumberOfColumns
-        // The parquet loader can load more columns than requested as it will
-        // always load a pandas index column if one is found.
-        if (schema.length > numColumns) {
-          table.close()
-          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
-            s"but only read ${numColumns} from $partFile")
-        }
-        if (castToFloat) {
-          val columns = new Array[ColumnVector](numColumns)
-          try {
-            for (i <- 0 until numColumns) {
-              val c = table.getColumn(i)
-              columns(i) = schema.fields(i).dataType match {
-                case nt: NumericType => c.asFloats()
-                case _ => c.incRefCount()
-              }
-            }
-            var tmp = table
-            table = new Table(columns: _*)
-            tmp.close()
-          } finally {
-            columns.foreach(v => if (v != null) v.close())
+        if (dataSize == 0) {
+          None
+        } else {
+          val prefix = "file:/home/allen/temp/parquet"
+          dumpParquetData(prefix, dataBuffer, dataSize, conf)
+          val parquetOptions = buildParquetOptions(options, schema)
+          var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
+          val numColumns = table.getNumberOfColumns
+          // The parquet loader can load more columns than requested as it will
+          // always load a pandas index column if one is found.
+          if (schema.length > numColumns) {
+            table.close()
+            throw new QueryExecutionException(s"Expected ${schema.length} columns " +
+              s"but only read ${numColumns} from $partFile")
           }
+          if (castToFloat) {
+            val columns = new Array[ColumnVector](numColumns)
+            try {
+              for (i <- 0 until numColumns) {
+                val c = table.getColumn(i)
+                columns(i) = schema.fields(i).dataType match {
+                  case nt: NumericType => c.asFloats()
+                  case _ => c.incRefCount()
+                }
+              }
+              var tmp = table
+              table = new Table(columns: _*)
+              tmp.close()
+            } finally {
+              columns.foreach(v => if (v != null) v.close())
+            }
+          }
+          Some(table)
         }
-        table
       } finally {
         dataBuffer.close()
       }
@@ -773,6 +776,10 @@ object GpuDataset {
     val fileSchema = footer.getFileMetaData.getSchema
     val blocks = footer.getBlocks.asScala
 
+    if (blocks.length == 0) {
+      (HostMemoryBuffer.allocate(0), 0)
+    }
+
     val in = filePath.getFileSystem(conf).open(filePath)
     try {
       var succeeded = false
@@ -802,7 +809,8 @@ object GpuDataset {
                                          parquetSchema: MessageType): Long = {
     // parquet foramt requirements
     var size: Long = 4 + 4 + 4
-    size += blocks.map(_.getTotalByteSize).sum
+//    size += blocks.map(_.getTotalByteSize).sum
+    size += blocks.flatMap(b => b.getColumns.asScala.map(_.getTotalSize)).sum
     // Calculate size of the footer metadata.
     // This uses the column metadata from the original file, but that should
     // always be at least as big as the updated metadata in the output.
@@ -871,9 +879,9 @@ object GpuDataset {
     block.setRowCount(rowCount)
 
     var totalSize: Long = 0
-    for (column <- columns) {
+    columns.foreach { column =>
       block.addColumn(column)
-      totalSize += column.getTotalSize
+      totalSize += column.getTotalUncompressedSize
     }
     block.setTotalByteSize(totalSize)
     block

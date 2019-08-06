@@ -35,7 +35,7 @@ import org.apache.spark.sql.types.StructType
 private[spark] class GpuDatasetRDD(
     @transient private val sparkSession: SparkSession,
     broadcastedConf: Broadcast[SerializableWritable[Configuration]],
-    readFunction: (Configuration, PartitionedFile) => Table with AutoCloseable,
+    readFunction: (Configuration, PartitionedFile) => Option[Table with AutoCloseable],
     @transient val filePartitions: Seq[FilePartition],
     schema: StructType)
   extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
@@ -97,7 +97,8 @@ private[spark] class GpuDatasetRDD(
 
 private[spark] object GpuDatasetRDD {
 
-  private def buildBatch(conf: Configuration, readFunc: (Configuration, PartitionedFile) => Table,
+  private def buildBatch(conf: Configuration,
+                         readFunc: (Configuration, PartitionedFile) => Option[Table],
       partfiles: Seq[PartitionedFile]): Option[Table] = {
     var result: Option[Table] = None
     if (partfiles.isEmpty) {
@@ -108,7 +109,7 @@ private[spark] object GpuDatasetRDD {
     val haveMultipleTables = tables.length > 1
     try {
       for ((partfile, i) <- partfiles.zipWithIndex) {
-        tables(i) = readPartFile(conf, readFunc, partfile)
+        tables(i) = readPartFile(conf, readFunc, partfile).getOrElse(null)
       }
       result = Some(if (haveMultipleTables) Table.concatenate(tables: _*) else tables(0))
     } finally {
@@ -124,8 +125,8 @@ private[spark] object GpuDatasetRDD {
 
   private def readPartFile(
       conf: Configuration,
-      readFunc: (Configuration, PartitionedFile) => Table,
-      partfile: PartitionedFile): Table = {
+      readFunc: (Configuration, PartitionedFile) => Option[Table],
+      partfile: PartitionedFile): Option[Table] = {
     try {
       readFunc(conf, partfile)
     } catch {
