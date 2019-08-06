@@ -345,7 +345,7 @@ struct XGBCachingDeviceAllocatorImpl : thrust::device_malloc_allocator<T> {
    {
     // Configure allocator with maximum cached bin size of ~1GB and no limit on
     // maximum cached bytes
-     static cub::CachingDeviceAllocator allocator(8,3,10);
+     static cub::CachingDeviceAllocator allocator(2, 9, 29);
      return allocator;
    }
    pointer allocate(size_t n) {
