@@ -283,9 +283,6 @@ class XGBoostRegressionModel private[ml] (
       Seq(StructField(name = _originalPredictionCol, dataType =
         ArrayType(FloatType, containsNull = false), nullable = false)))
 
-    // since native model will not save predictor context, force to gpu predictor
-    _booster.setParam("predictor", "gpu_predictor")
-
     val bBooster = dataset.sparkSession.sparkContext.broadcast(_booster)
     val appName = dataset.sparkSession.sparkContext.appName
 
@@ -317,6 +314,8 @@ class XGBoostRegressionModel private[ml] (
 
       Rabit.init(rabitEnv.asJava)
       try {
+        // since native model will not save predictor context, force to gpu predictor
+        bBooster.value.setParam("predictor", "gpu_predictor")
         val Array(rawPredictionItr, predLeafItr, predContribItr) =
           producePredictionItrs(bBooster, dm)
         produceResultIterator(GpuDataset.columnBatchToRows(columnBatch),
