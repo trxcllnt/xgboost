@@ -113,7 +113,6 @@ private[spark] object GpuDatasetRDD {
         readPartFile(conf, readFunc, partfile) match {
           case Some(table) => {
             tables.append(table)
-//            tableCounts += 1
           }
           case None => {
             // do nothing
