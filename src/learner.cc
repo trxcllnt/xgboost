@@ -221,7 +221,7 @@ class LearnerImpl : public Learner {
     // non gpu impl returns -1
     if (id > -1) {
       LOG(DEBUG) << "Load setting gpu id to: " << id;
-      tparam_.gpu_id = id;
+      generic_param_.gpu_id = id;
     }
 
     // read parameter
