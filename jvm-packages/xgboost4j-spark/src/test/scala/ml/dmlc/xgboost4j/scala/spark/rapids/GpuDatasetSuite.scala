@@ -16,6 +16,7 @@
 
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
+
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import ml.dmlc.xgboost4j.scala.spark.PerTest
@@ -237,17 +238,115 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assert(newset.partitions(2).files.contains(partFiles(0)))
   }
 
-  test("repartition more than number of files") {
-    val oldPartitions = Seq(
-      FilePartition(0, Seq(PartitionedFile(null, "/a/b/c", 0, 123))),
-      FilePartition(1, Seq(PartitionedFile(null, "/a/b/d", 0, 456)))
-    )
-    val ds = new GpuDataset(null, null, null, false, Some(oldPartitions))
-    assertThrows[UnsupportedOperationException] { ds.repartition(3) }
+  test(testName = "auto split csv file when loading") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 30)
+    assume(Cuda.isEnvCompatibleForTesting)
+
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.csvsplit.csv"))
+    val firstPartFile = dataset.partitions(0).files(0)
+    val secondPartFile = dataset.partitions(1).files(0)
+    assertResult(2) { dataset.partitions.length }
+    assertResult(50) {dataset.partitions.flatMap(_.files).map(_.length).sum}
+    assertResult(30) {firstPartFile.length}
+    assertResult(30) {secondPartFile.start}
+    assertResult(20) {secondPartFile.length}
+
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong,
+        b.getColumnVector(3).sum().getLong,
+        b.getColumnVector(4).sum().getLong))
+    val counts = rdd.collect
+    csvSplitColumnSumVerification(counts)
   }
+
+  test(testName = "csv repartition for numPartitions is greater than numPartitionedFiles") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/test.csvsplit.csv"))
+    val newDataset = dataset.repartition(2)
+    assertResult(2) {newDataset.partitions.length}
+    assertResult(1) {newDataset.partitions(0).files.length}
+    assertResult(true) {
+      newDataset.partitions(1).files(0).start == newDataset.partitions(0).files(0).length}
+
+    val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong,
+        b.getColumnVector(3).sum().getLong,
+        b.getColumnVector(4).sum().getLong))
+    println(rdd.mapPartitions(iter => Iterator(iter.length)).collect().size)
+    val counts = rdd.collect
+    csvSplitColumnSumVerification(counts)
+  }
+
+
+  test("csv split when numPartitions is greater than numRows") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 3)
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
+
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong))
+    assertResult(2) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(1) {counts(0)_1}
+    assertResult(2) {counts(0)_2}
+    assertResult(3) {counts(0)_3}
+  }
+
+  test("csv repartition when numPartitions is greater than total bytes") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
+    val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
+    val newDataset = dataset.repartition(10)
+    assertResult(5) {newDataset.partitions.length}
+
+    val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(b.getColumnVector(0).sum().getLong,
+        b.getColumnVector(1).sum().getLong,
+        b.getColumnVector(2).sum().getLong))
+    assertResult(5) {rdd.getNumPartitions}
+
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(1) {counts(0)_1}
+    assertResult(2) {counts(0)_2}
+    assertResult(3) {counts(0)_3}
+  }
+
+
+
 
   private def getTestDataPath(resource: String): String = {
     require(resource.startsWith("/"), "resource must start with /")
     getClass.getResource(resource).getPath
+  }
+
+
+  private def csvSplitColumnSumVerification(counts: Array[(Long, Long, Long, Long, Long)]):
+    Unit = {
+    assertResult(2) {counts.length}
+    assertResult(1 + 6 + 11) {counts(0)._1}
+    assertResult(2 + 7 + 12) {counts(0)._2}
+    assertResult(3 + 8 + 13) {counts(0)._3}
+    assertResult(4 + 9 + 14 ) {counts(0)._4}
+    assertResult(5 + 10 + 15 ) {counts(0)._5}
+    assertResult(16) {counts(1)._1}
+    assertResult(17) {counts(1)._2}
+    assertResult(18) {counts(1)._3}
+    assertResult(19) {counts(1)._4}
+    assertResult(20) {counts(1)._5}
   }
 }
