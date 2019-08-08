@@ -588,7 +588,6 @@ object GpuDataset {
           }
           Some(table)
         }
-
       } finally {
         dataBuffer.close()
       }
