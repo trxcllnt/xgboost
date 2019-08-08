@@ -250,7 +250,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val secondPartFile = dataset.partitions(1).files(0)
     assertResult(2) { dataset.partitions.length }
     assertResult(50) {dataset.partitions.flatMap(_.files).map(_.length).sum}
-
     assertResult(30) {firstPartFile.length}
     assertResult(30) {secondPartFile.start}
     assertResult(20) {secondPartFile.length}
@@ -263,7 +262,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getColumnVector(4).sum().getLong))
     val counts = rdd.collect
     csvSplitColumnSumVerification(counts)
-
   }
 
   test(testName = "csv repartition for numPartitions is greater than numPartitionedFiles") {
@@ -283,7 +281,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getColumnVector(2).sum().getLong,
         b.getColumnVector(3).sum().getLong,
         b.getColumnVector(4).sum().getLong))
-    println(rdd.mapPartitions(iter => Iterator(iter.length)).collect().size)
+    assertResult(2) {rdd.getNumPartitions}
     val counts = rdd.collect
     csvSplitColumnSumVerification(counts)
   }
@@ -301,6 +299,8 @@ class GpuDatasetSuite extends FunSuite with PerTest {
       Iterator.single(
         b.getNumColumns, b.getNumRows
       ))
+
+    assertResult(2) {rdd.getNumPartitions}
     val counts = rdd.collect
     assertResult(1) { counts.length }
     assertResult(5) { counts(0)._1 }
@@ -314,12 +314,16 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
     assertResult(1) {dataset.partitions.length}
+
     val newDataset = dataset.repartition(2)
     assertResult(2) {newDataset.partitions.length}
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+
+    val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(
         b.getNumColumns, b.getNumRows
       ))
+
+    assertResult(2) {rdd.getNumPartitions}
     val counts = rdd.collect
     assertResult(1) {counts.length}
     assertResult(5) {counts(0)._1}
@@ -365,8 +369,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(2) {counts(0)_2}
     assertResult(3) {counts(0)_3}
   }
-
-
 
 
   private def getTestDataPath(resource: String): String = {

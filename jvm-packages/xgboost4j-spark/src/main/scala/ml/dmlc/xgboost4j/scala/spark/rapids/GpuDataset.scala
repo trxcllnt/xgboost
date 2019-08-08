@@ -243,7 +243,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
 
   private def fileTypeSupportSplit(fileType: String): Boolean = {
-    return fileType == "csv"
+    return fileType == "csv" ||
+      fileType == "parquet"
   }
   private def getSplits(
       partitions: Seq[PartitionDirectory],
@@ -796,29 +797,29 @@ object GpuDataset {
 
     if (blocks.length == 0) {
       (HostMemoryBuffer.allocate(0), 0)
-    }
-
-    val in = filePath.getFileSystem(conf).open(filePath)
-    try {
-      var succeeded = false
-      val hmb = HostMemoryBuffer.allocate(calculateParquetOutputSize(blocks, fileSchema))
+    } else {
+      val in = filePath.getFileSystem(conf).open(filePath)
       try {
-        val out = new HostMemoryBufferOutputStream(hmb)
-        out.write(PARQUET_MAGIC)
-        val outputBlocks = copyBlocksData(in, out, blocks, partFile)
-        val footerPos = out.getPos
-        writeFooter(out, outputBlocks, fileSchema)
-        BytesUtils.writeIntLittleEndian(out, (out.getPos - footerPos).toInt)
-        out.write(PARQUET_MAGIC)
-        succeeded = true
-        (hmb, out.getPos)
-      } finally {
-        if (!succeeded) {
-          hmb.close()
+        var succeeded = false
+        val hmb = HostMemoryBuffer.allocate(calculateParquetOutputSize(blocks, fileSchema))
+        try {
+          val out = new HostMemoryBufferOutputStream(hmb)
+          out.write(PARQUET_MAGIC)
+          val outputBlocks = copyBlocksData(in, out, blocks, partFile)
+          val footerPos = out.getPos
+          writeFooter(out, outputBlocks, fileSchema)
+          BytesUtils.writeIntLittleEndian(out, (out.getPos - footerPos).toInt)
+          out.write(PARQUET_MAGIC)
+          succeeded = true
+          (hmb, out.getPos)
+        } finally {
+          if (!succeeded) {
+            hmb.close()
+          }
         }
+      } finally {
+        in.close()
       }
-    } finally {
-      in.close()
     }
   }
 
