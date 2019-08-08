@@ -266,7 +266,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
 
   }
 
-  test(testName = "repartition for numPartitions is greater than numPartitionedFiles") {
+  test(testName = "csv repartition for numPartitions is greater than numPartitionedFiles") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE, d DOUBLE, e DOUBLE"
@@ -283,6 +283,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getColumnVector(2).sum().getLong,
         b.getColumnVector(3).sum().getLong,
         b.getColumnVector(4).sum().getLong))
+    println(rdd.mapPartitions(iter => Iterator(iter.length)).collect().size)
     val counts = rdd.collect
     csvSplitColumnSumVerification(counts)
   }
@@ -336,6 +337,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
       Iterator.single(b.getColumnVector(0).sum().getLong,
         b.getColumnVector(1).sum().getLong,
         b.getColumnVector(2).sum().getLong))
+    assertResult(2) {rdd.getNumPartitions}
     val counts = rdd.collect
     assertResult(1) {counts.length}
     assertResult(1) {counts(0)_1}
@@ -349,11 +351,14 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val csvSchema = "a DOUBLE, b DOUBLE, c DOUBLE"
     val dataset = reader.schema(csvSchema).csv(getTestDataPath("/1line.csv"))
     val newDataset = dataset.repartition(10)
+    assertResult(5) {newDataset.partitions.length}
 
-    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+    val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
       Iterator.single(b.getColumnVector(0).sum().getLong,
         b.getColumnVector(1).sum().getLong,
         b.getColumnVector(2).sum().getLong))
+    assertResult(5) {rdd.getNumPartitions}
+
     val counts = rdd.collect
     assertResult(1) {counts.length}
     assertResult(1) {counts(0)_1}

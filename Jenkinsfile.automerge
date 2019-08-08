@@ -1,3 +1,5 @@
+@Library('shared-libs') _
+
 pipeline {
     agent any
 
@@ -34,9 +36,17 @@ pipeline {
         }
     }
 
-  post {
-      always {
-          deleteDir() /* clean up our workspace */
-      }
-  }
+    post {
+        always {
+            script {
+                if (currentBuild.currentResult == "SUCCESS") {
+                    updateGitlabCommitStatus(name: 'Jenkins CI', state: "success")
+                    slack("#rapidsai-spark-cicd", "Success", color: "#33CC33")
+                } else {
+                    updateGitlabCommitStatus(name: 'Jenkins CI', state: "failed")
+                    slack("#rapidsai-spark-cicd", "Failed", color: "#FF0000")
+                }
+            }
+        }
+    }
 }
