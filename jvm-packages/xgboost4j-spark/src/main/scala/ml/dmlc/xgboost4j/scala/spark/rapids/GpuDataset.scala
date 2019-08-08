@@ -23,16 +23,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
 import java.util.Collections
 
-
 import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
-
 import org.apache.commons.logging.LogFactory
 import org.apache.commons.io.output.{CountingOutputStream, NullOutputStream}
 import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{BlockLocation, FSDataInputStream, FileStatus, LocatedFileStatus, Path, FSDataOutputStream}
+import org.apache.hadoop.fs.{BlockLocation, FSDataInputStream, FSDataOutputStream, FileStatus, LocatedFileStatus, Path}
 import org.apache.parquet.bytes.BytesUtils
 import org.apache.parquet.format.converter.ParquetMetadataConverter
 import org.apache.parquet.hadoop.ParquetFileReader
@@ -45,6 +43,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFileLinesReader, HadoopFsRelation, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.QueryExecutionException
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
 
@@ -109,9 +108,11 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
       fsRelation.schema, sourceOptions, castAllToFloats)
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
+    val debugDumpPrefix = sparkSession.sessionState.conf
+      .getConfString("spark.rapids.sql.parquet.debug-dump-prefix", null)
     val serializableConf = new SerializableWritable[Configuration](hadoopConf)
     val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
-    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader,
+    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, debugDumpPrefix, partitionReader,
       partitions, schema)
   }
 
@@ -545,7 +546,7 @@ object GpuDataset {
         sourceType: String,
         schema: StructType,
         options: Map[String, String],
-        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
+        castAllToFloats: Boolean): (Configuration, String, PartitionedFile) => Option[Table] = {
     sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
       case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
@@ -558,7 +559,7 @@ object GpuDataset {
       sparkSession: SparkSession,
       inputSchema: StructType,
       options: Map[String, String],
-      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
+      castAllToFloats: Boolean): (Configuration, String, PartitionedFile) => Option[Table] = {
     // Try to build CSV options on the driver here to validate and fail fast.
     // The other CSV option build below will occur on the executors.
     buildCsvOptions(options, true) // add virtual "isFirstSplit" for validation.
@@ -567,8 +568,8 @@ object GpuDataset {
     } else {
       inputSchema
     }
-    (conf: Configuration, partFile: PartitionedFile) => {
-      val (dataBuffer, dataSize) = readCsvPartFile(conf, partFile)
+    (conf: Configuration, dumpPrefix: String, partFile: PartitionedFile) => {
+      val (dataBuffer, dataSize) = readCsvPartFile(conf, dumpPrefix, partFile)
       try {
 
         if (dataSize == 0) {
@@ -598,19 +599,21 @@ object GpuDataset {
       sparkSession: SparkSession,
       schema: StructType,
       options: Map[String, String],
-      castToFloat: Boolean): (Configuration, PartitionedFile) => Option[Table] = {
+      castToFloat: Boolean): (Configuration, String, PartitionedFile) => Option[Table] = {
     // Try to build Parquet options on the driver here to validate and fail fast.
     // The other Parquet option build below will occur on the executors.
     buildParquetOptions(options, schema)
 
-    (conf: Configuration, partFile: PartitionedFile) => {
+    (conf: Configuration, dumpPrefix: String, partFile: PartitionedFile) => {
       val (dataBuffer, dataSize) = readParquetPartFile(conf, partFile)
       try {
         if (dataSize == 0) {
           None
         } else {
-          val prefix = "file:/home/allen/temp/parquet"
-          dumpParquetData(prefix, dataBuffer, dataSize, conf)
+
+          if (dumpPrefix != null) {
+            dumpParquetData(dumpPrefix, dataBuffer, dataSize, conf)
+          }
           val parquetOptions = buildParquetOptions(options, schema)
           var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
           val numColumns = table.getNumberOfColumns
@@ -730,7 +733,7 @@ object GpuDataset {
   }
 
 
-  private def readCsvPartFile(conf: Configuration, partFile: PartitionedFile):
+  private def readCsvPartFile(conf: Configuration, dumpPrefix: String, partFile: PartitionedFile):
     (HostMemoryBuffer, Long) = {
     // use '\n' as line seperator.
     val seperator = Array('\n'.toByte)
