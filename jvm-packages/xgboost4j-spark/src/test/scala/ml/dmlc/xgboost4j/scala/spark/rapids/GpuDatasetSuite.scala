@@ -129,7 +129,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
   }
 
   test("Parquet parsing") {
-    // this test will fail with "double free or corruption (!prev)"
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(TRAIN_PARQUET_PATH)
@@ -291,8 +290,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
   test("auto split when loading parquet file") {
     ss.conf.set("spark.sql.files.maxPartitionBytes", 3000)
     assume(Cuda.isEnvCompatibleForTesting)
-
-
     val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
     val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
@@ -309,8 +306,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
 
   test("Parquet repartition when numPartitions is greater than numPartitionedFile") {
     assume(Cuda.isEnvCompatibleForTesting)
-
-
     val reader = new GpuDataReader(ss)
     val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
     assertResult(1) {dataset.partitions.length}
