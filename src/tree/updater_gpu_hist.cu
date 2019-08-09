@@ -867,7 +867,8 @@ struct DeviceShard {
   std::unique_ptr<ExpandQueue> qexpand;
 
   DeviceShard(int _device_id, int shard_idx, bst_uint row_begin,
-              bst_uint row_end, TrainParam _param, uint32_t column_sampler_seed,
+              bst_uint row_end, TrainParam _param,
+              uint32_t column_sampler_seed,
               uint32_t n_features)
       : device_id(_device_id),
         shard_idx(shard_idx),
@@ -887,10 +888,10 @@ struct DeviceShard {
   void ComputeItemsInShard(const SparsePage &row_batch, const RowStateOnDevice &device_row_state);
 
   void InitCompressedData(
-      const common::HistCutMatrix& hmat, size_t row_stride, bool is_dense);
+      const common::HistogramCuts& hmat, size_t row_stride, bool is_dense);
 
   void CreateHistIndices(
-      const SparsePage &row_batch, const common::HistCutMatrix &hmat,
+      const SparsePage &row_batch, const common::HistogramCuts &hmat,
       const RowStateOnDevice &device_row_state, int rows_per_batch);
 
   ~DeviceShard() {
@@ -1042,7 +1043,7 @@ struct DeviceShard {
     const int items_per_thread = 8;
     const int block_threads = 256;
     const int grid_size = static_cast<int>(
-        dh::DivRoundUp(n_elements, items_per_thread * block_threads));
+        common::DivRoundUp(n_elements, items_per_thread * block_threads));
     SharedMemHistKernel<<<grid_size, block_threads, smem_size>>>(
         *ellpack_matrix, d_ridx, d_node_hist.data(), d_gpair, n_elements,
         use_shared_memory_histograms);
@@ -1351,10 +1352,10 @@ inline void DeviceShard<GradientSumT>::ComputeItemsInShard(
 
 template <typename GradientSumT>
 inline void DeviceShard<GradientSumT>::InitCompressedData(
-    const common::HistCutMatrix &hmat, size_t row_stride, bool is_dense) {
+    const common::HistogramCuts &hmat, size_t row_stride, bool is_dense) {
   this->row_stride = row_stride;
-  n_bins = hmat.row_ptr.back();
-  int null_gidx_value = hmat.row_ptr.back();
+  n_bins = hmat.Ptrs().back();
+  int null_gidx_value = hmat.Ptrs().back();
 
   CHECK(!(param.max_leaves == 0 && param.max_depth == 0))
       << "Max leaves and max depth cannot both be unconstrained for "
@@ -1366,14 +1367,14 @@ inline void DeviceShard<GradientSumT>::InitCompressedData(
   ba.Allocate(device_id,
               &prediction_cache, n_rows,
               &node_sum_gradients_d, max_nodes,
-              &feature_segments, hmat.row_ptr.size(),
-              &gidx_fvalue_map, hmat.cut.size(),
-              &min_fvalue, hmat.min_val.size(),
+              &feature_segments, hmat.Ptrs().size(),
+              &gidx_fvalue_map, hmat.Values().size(),
+              &min_fvalue, hmat.MinValues().size(),
               &monotone_constraints, param.monotone_constraints.size());
 
-  dh::CopyVectorToDeviceSpan(gidx_fvalue_map, hmat.cut);
-  dh::CopyVectorToDeviceSpan(min_fvalue, hmat.min_val);
-  dh::CopyVectorToDeviceSpan(feature_segments, hmat.row_ptr);
+  dh::CopyVectorToDeviceSpan(gidx_fvalue_map, hmat.Values());
+  dh::CopyVectorToDeviceSpan(min_fvalue, hmat.MinValues());
+  dh::CopyVectorToDeviceSpan(feature_segments, hmat.Ptrs());
   dh::CopyVectorToDeviceSpan(monotone_constraints, param.monotone_constraints);
 
   node_sum_gradients.resize(max_nodes);
@@ -1425,26 +1426,26 @@ inline void DeviceShard<GradientSumT>::InitCompressedData(
   // check if we can use shared memory for building histograms
   // (assuming atleast we need 2 CTAs per SM to maintain decent latency
   // hiding)
-  auto histogram_size = sizeof(GradientSumT) * hmat.row_ptr.back();
+  auto histogram_size = sizeof(GradientSumT) * hmat.Ptrs().back();
   auto max_smem = dh::MaxSharedMemory(device_id);
   if (histogram_size <= max_smem) {
     use_shared_memory_histograms = true;
   }
 
   // Init histogram
-  hist.Init(device_id, hmat.NumBins());
+  hist.Init(device_id, hmat.Ptrs().back());
 }
 
 template <typename GradientSumT>
 inline void DeviceShard<GradientSumT>::CreateHistIndices(
     const SparsePage &row_batch,
-    const common::HistCutMatrix &hmat,
+    const common::HistogramCuts &hmat,
     const RowStateOnDevice &device_row_state,
     int rows_per_batch) {
   // Has any been allocated for me in this batch?
   if (!device_row_state.rows_to_process_from_batch) return;
 
-  unsigned int null_gidx_value = hmat.row_ptr.back();
+  unsigned int null_gidx_value = hmat.Ptrs().back();
 
   const auto &offset_vec = row_batch.offset.ConstHostVector();
   size_t base_offset = offset_vec[device_row_state.row_offset_in_current_batch];
@@ -1455,8 +1456,8 @@ inline void DeviceShard<GradientSumT>::CreateHistIndices(
     static_cast<size_t>(device_row_state.rows_to_process_from_batch));
   const std::vector<Entry>& data_vec = row_batch.data.ConstHostVector();
 
-  size_t gpu_nbatches = dh::DivRoundUp(device_row_state.rows_to_process_from_batch,
-                                       gpu_batch_nrows);
+  size_t gpu_nbatches = common::DivRoundUp(device_row_state.rows_to_process_from_batch,
+                                           gpu_batch_nrows);
 
   for (size_t gpu_batch = 0; gpu_batch < gpu_nbatches; ++gpu_batch) {
     size_t batch_row_begin = gpu_batch * gpu_batch_nrows;
@@ -1487,8 +1488,8 @@ inline void DeviceShard<GradientSumT>::CreateHistIndices(
          (entries_d.data().get(), data_vec.data() + ent_cnt_begin,
           n_entries * sizeof(Entry), cudaMemcpyDefault));
     const dim3 block3(32, 8, 1);  // 256 threads
-    const dim3 grid3(dh::DivRoundUp(batch_nrows, block3.x),
-                     dh::DivRoundUp(row_stride, block3.y), 1);
+    const dim3 grid3(common::DivRoundUp(batch_nrows, block3.x),
+                     common::DivRoundUp(row_stride, block3.y), 1);
     CompressBinEllpackKernel<<<grid3, block3>>>
         (*this->ellpack_matrix,
          row_ptrs.data().get(),
@@ -1558,13 +1559,12 @@ template <typename GradientSumT>
 class GPUHistMakerSpecialised {
  public:
   GPUHistMakerSpecialised() : initialised_{false}, p_last_fmat_{nullptr} {}
-  void Init(const std::vector<std::pair<std::string, std::string>>& args,
-            LearnerTrainParam const* lparam) {
+  void Configure(const Args& args, GenericParameter const* generic_param) {
     param_.InitAllowUnknown(args);
-    learner_param_ = lparam;
+    generic_param_ = generic_param;
     hist_maker_param_.InitAllowUnknown(args);
-    auto devices = GPUSet::All(learner_param_->gpu_id,
-                               learner_param_->n_gpus);
+    auto devices = GPUSet::All(generic_param_->gpu_id,
+                               generic_param_->n_gpus);
     n_devices_ = devices.Size();
     CHECK(n_devices_ != 0) << "Must have at least one device";
     dist_ = GPUDistribution::Block(devices);
@@ -1630,12 +1630,12 @@ class GPUHistMakerSpecialised {
 
     monitor_.StartCuda("Quantiles");
     // Create the quantile sketches for the dmatrix and initialize HistogramCuts
-    size_t row_stride = common::DeviceSketch(param_, *learner_param_,
+    size_t row_stride = common::DeviceSketch(param_, *generic_param_,
                                              hist_maker_param_.gpu_batch_nrows,
                                              dmat, &hmat_);
     monitor_.StopCuda("Quantiles");
 
-    n_bins_ = hmat_.row_ptr.back();
+    n_bins_ = hmat_.Ptrs().back();
 
     auto is_dense = info_->num_nonzero_ == info_->num_row_ * info_->num_col_;
 
@@ -1767,7 +1767,7 @@ class GPUHistMakerSpecialised {
   }
 
   TrainParam param_;           // NOLINT
-  common::HistCutMatrix hmat_; // NOLINT
+  common::HistogramCuts hmat_; // NOLINT
   MetaInfo* info_;             // NOLINT
 
   std::vector<std::unique_ptr<DeviceShard<GradientSumT>>> shards_;  // NOLINT
@@ -1779,7 +1779,7 @@ class GPUHistMakerSpecialised {
   int n_bins_;
 
   GPUHistMakerTrainParam hist_maker_param_;
-  LearnerTrainParam const* learner_param_;
+  GenericParameter const* generic_param_;
 
   dh::AllReducer reducer_;
 
@@ -1793,17 +1793,16 @@ class GPUHistMakerSpecialised {
 
 class GPUHistMaker : public TreeUpdater {
  public:
-  void Init(
-      const std::vector<std::pair<std::string, std::string>>& args) override {
+  void Configure(const Args& args) override {
     hist_maker_param_.InitAllowUnknown(args);
     float_maker_.reset();
     double_maker_.reset();
     if (hist_maker_param_.single_precision_histogram) {
       float_maker_.reset(new GPUHistMakerSpecialised<GradientPair>());
-      float_maker_->Init(args, tparam_);
+      float_maker_->Configure(args, tparam_);
     } else {
       double_maker_.reset(new GPUHistMakerSpecialised<GradientPairPrecise>());
-      double_maker_->Init(args, tparam_);
+      double_maker_->Configure(args, tparam_);
     }
   }
 
@@ -1823,6 +1822,10 @@ class GPUHistMaker : public TreeUpdater {
     } else {
       return double_maker_->UpdatePredictionCache(data, p_out_preds);
     }
+  }
+
+  char const* Name() const override {
+    return "gpu_hist";
   }
 
  private:

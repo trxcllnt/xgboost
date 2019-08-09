@@ -56,17 +56,17 @@ TEST(GpuHist, DeviceHistogram) {
 }
 
 namespace {
-class HistogramCutsWrapper : public common::HistCutMatrix {
+class HistogramCutsWrapper : public common::HistogramCuts {
  public:
-  using SuperT = common::HistCutMatrix;
+  using SuperT = common::HistogramCuts;
   void SetValues(std::vector<float> cuts) {
-    SuperT::cut = cuts;
+    SuperT::cut_values_ = cuts;
   }
   void SetPtrs(std::vector<uint32_t> ptrs) {
-    SuperT::row_ptr = ptrs;
+    SuperT::cut_ptrs_ = ptrs;
   }
   void SetMins(std::vector<float> mins) {
-    SuperT::min_val = mins;
+    SuperT::min_vals_ = mins;
   }
 };
 }  //  anonymous namespace
@@ -320,15 +320,15 @@ TEST(GpuHist, EvaluateSplits) {
 
   // Copy cut matrix to device.
   shard->ba.Allocate(0,
-                     &(shard->feature_segments), cmat.row_ptr.size(),
-                     &(shard->min_fvalue), cmat.min_val.size(),
+                     &(shard->feature_segments), cmat.Ptrs().size(),
+                     &(shard->min_fvalue), cmat.MinValues().size(),
                      &(shard->gidx_fvalue_map), 24,
                      &(shard->monotone_constraints), kNCols);
-  dh::CopyVectorToDeviceSpan(shard->feature_segments, cmat.row_ptr);
-  dh::CopyVectorToDeviceSpan(shard->gidx_fvalue_map, cmat.cut);
+  dh::CopyVectorToDeviceSpan(shard->feature_segments, cmat.Ptrs());
+  dh::CopyVectorToDeviceSpan(shard->gidx_fvalue_map, cmat.Values());
   dh::CopyVectorToDeviceSpan(shard->monotone_constraints,
                              param.monotone_constraints);
-  dh::CopyVectorToDeviceSpan(shard->min_fvalue, cmat.min_val);
+  dh::CopyVectorToDeviceSpan(shard->min_fvalue, cmat.MinValues());
   shard->ellpack_matrix.reset(
     new ELLPackMatrix(shard->feature_segments, shard->min_fvalue, shard->gidx_fvalue_map,
                       common::CompressedBufferWriter(0),
@@ -397,12 +397,12 @@ void TestHistogramIndexImpl(int n_gpus) {
     {"max_leaves", "0"}
   };
 
-  LearnerTrainParam learner_param(CreateEmptyGenericParam(0, n_gpus));
-  hist_maker.Init(training_params, &learner_param);
+  GenericParameter generic_param(CreateEmptyGenericParam(0, n_gpus));
+  hist_maker.Configure(training_params, &generic_param);
   hist_maker.InitDataOnce(hist_maker_dmat.get());
 
-  LearnerTrainParam learner_param_ext(CreateEmptyGenericParam(0, n_gpus));
-  hist_maker_ext.Init(training_params, &learner_param_ext);
+  GenericParameter generic_param_ext(CreateEmptyGenericParam(0, n_gpus));
+  hist_maker_ext.Configure(training_params, &generic_param_ext);
   hist_maker_ext.InitDataOnce(hist_maker_ext_dmat.get());
 
   ASSERT_EQ(hist_maker.shards_.size(), hist_maker_ext.shards_.size());
