@@ -114,6 +114,7 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L,
       "tree_method" -> "gpu_hist",
+      "predictor" -> "gpu_predictor",
       "max_bin" -> 16
       )
 

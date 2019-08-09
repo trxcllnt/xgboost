@@ -127,6 +127,7 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
       "num_round" -> 100,
       "num_workers" -> 1,
       "tree_method" -> "gpu_hist",
+      "predictor" -> "gpu_predictor",
       "max_bin" -> 16)
 
     val model1 = ScalaXGBoost.train(trainingDM, paramMap, round)

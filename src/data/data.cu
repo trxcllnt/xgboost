@@ -55,7 +55,7 @@ void MetaInfo::SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols, in
   bst_float* data = field->DevicePointer(device_id);
   for (size_t i = 0; i < n_cols; ++i) {
     int block = 256;
-    unpack_cudf_column_k<<<dh::DivRoundUp(n_rows, block), block>>>
+    unpack_cudf_column_k<<<common::DivRoundUp(n_rows, block), block>>>
       (data + i, n_rows, n_cols, *cols[i]);
     dh::safe_cuda(cudaGetLastError());
   }
