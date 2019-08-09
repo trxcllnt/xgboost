@@ -31,7 +31,7 @@ fi
 deploySubModule()
 {
     FILE_LIST=()
-    FPATH="$OUT/$1/$1-$REL_VERSION"
+    FPATH="$OUT/$1/$1_$SCALA_BIN_VERSION-$REL_VERSION"
     for CLS in $(IFS=, ; echo $CLASSIFIERS); do
         FILE_LIST+=("$FPATH-$CLS.jar")
     done
@@ -51,6 +51,11 @@ REL_VERSION=`mvn exec:exec -q --non-recursive \
     -Dexec.executable=echo \
     -Dexec.args='${project.version}'`
 echo "XGBoost version = $REL_VERSION"
+
+SCALA_BIN_VERSION=`mvn exec:exec -q --non-recursive \
+    -Dexec.executable=echo \
+    -Dexec.args='${scala.binary.version}'`
+echo "scala binary version = $SCALA_BIN_VERSION"
 
 # Deploy parent pom file of jvm-packages
 $DEPLOY_CMD -Dfile=./pom.xml -DpomFile=./pom.xml
