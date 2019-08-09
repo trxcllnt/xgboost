@@ -109,8 +109,6 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
       fsRelation.schema, sourceOptions, castAllToFloats)
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
-    val debugDumpPrefix = sparkSession.sessionState.conf
-      .getConfString("spark.rapids.splits.debug-dump-prefix", null)
     val serializableConf = new SerializableWritable[Configuration](hadoopConf)
     val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
     new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader,
