@@ -90,6 +90,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
   private val logger = LogFactory.getLog(classOf[GpuDataset])
 
+
   /** Returns the schema of the data. */
   def schema: StructType = {
     if (castAllToFloats) {
@@ -109,10 +110,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
       fsRelation.schema, sourceOptions, castAllToFloats)
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
     val debugDumpPrefix = sparkSession.sessionState.conf
-      .getConfString("spark.rapids.sql.parquet.debug-dump-prefix", null)
+      .getConfString("spark.rapids.splits.debug-dump-prefix", null)
     val serializableConf = new SerializableWritable[Configuration](hadoopConf)
     val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
-    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, debugDumpPrefix, partitionReader,
+    new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader,
       partitions, schema)
   }
 
@@ -244,9 +245,13 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
 
   private def fileTypeSupportSplit(fileType: String): Boolean = {
-    return fileType == "csv" ||
-      fileType == "parquet"
+    fileType match {
+      case "csv" => true
+      case "parquet" => true
+      case _ => false
+    }
   }
+
   private def getSplits(
       partitions: Seq[PartitionDirectory],
       maxSplitBytes: Long): Seq[PartitionedFile] = {
@@ -454,6 +459,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
 object GpuDataset {
   private val logger = LogFactory.getLog(classOf[GpuDataset])
+  private val PARQUET_MAGIC = "PAR1".getBytes(StandardCharsets.US_ASCII)
 
   private def getMapper[U: ClassTag](func: GpuColumnBatch => Iterator[U]):
       Iterator[GpuColumnBatch] => Iterator[U] = {
@@ -619,7 +625,7 @@ object GpuDataset {
           val numColumns = table.getNumberOfColumns
           // The parquet loader can load more columns than requested as it will
           // always load a pandas index column if one is found.
-          if (schema.length > numColumns) {
+          if (schema.length != numColumns) {
             table.close()
             throw new QueryExecutionException(s"Expected ${schema.length} columns " +
               s"but only read ${numColumns} from $partFile")
@@ -712,7 +718,8 @@ object GpuDataset {
     (hmb, totalBytesRead)
   }
 
-  private def estimatedHostBufferSize(conf: Configuration, partFile: PartitionedFile): Long = {
+  private def estimatedHostBufferSizeForCsv(conf: Configuration, partFile: PartitionedFile):
+    Long = {
     val rawPath = new Path(partFile.filePath)
     val fs = rawPath.getFileSystem(conf)
     val path = fs.makeQualified(rawPath)
@@ -739,7 +746,7 @@ object GpuDataset {
     val seperator = Array('\n'.toByte)
     var succeeded = false
     var totalSize: Long = 0L
-    var hmb = HostMemoryBuffer.allocate(estimatedHostBufferSize(conf, partFile))
+    var hmb = HostMemoryBuffer.allocate(estimatedHostBufferSizeForCsv(conf, partFile))
     try {
       val lineReader = new HadoopFileLinesReader(partFile, Some(seperator), conf)
       try {
@@ -788,10 +795,8 @@ object GpuDataset {
 
   private def readParquetPartFile(conf: Configuration, partFile: PartitionedFile):
     (HostMemoryBuffer, Long) = {
-    val PARQUET_MAGIC = "PAR1".getBytes(StandardCharsets.US_ASCII)
 
     val filePath = new Path(new URI(partFile.filePath))
-
     val footer = ParquetFileReader.readFooter(conf, filePath,
       ParquetMetadataConverter.range(partFile.start, partFile.start + partFile.length))
     val fileSchema = footer.getFileMetaData.getSchema
@@ -806,12 +811,12 @@ object GpuDataset {
         val hmb = HostMemoryBuffer.allocate(calculateParquetOutputSize(blocks, fileSchema))
         try {
           val out = new HostMemoryBufferOutputStream(hmb)
-          out.write(PARQUET_MAGIC)
+          out.write(GpuDataset.PARQUET_MAGIC)
           val outputBlocks = copyBlocksData(in, out, blocks, partFile)
           val footerPos = out.getPos
           writeFooter(out, outputBlocks, fileSchema)
           BytesUtils.writeIntLittleEndian(out, (out.getPos - footerPos).toInt)
-          out.write(PARQUET_MAGIC)
+          out.write(GpuDataset.PARQUET_MAGIC)
           succeeded = true
           (hmb, out.getPos)
         } finally {
@@ -826,11 +831,11 @@ object GpuDataset {
   }
 
 
-  private def calculateParquetOutputSize(blocks: Seq[BlockMetaData],
-                                         parquetSchema: MessageType): Long = {
+  private def calculateParquetOutputSize(
+      blocks: Seq[BlockMetaData],
+      parquetSchema: MessageType): Long = {
     // parquet foramt requirements
     var size: Long = 4 + 4 + 4
-//    size += blocks.map(_.getTotalByteSize).sum
     size += blocks.flatMap(b => b.getColumns.asScala.map(_.getTotalSize)).sum
     // Calculate size of the footer metadata.
     // This uses the column metadata from the original file, but that should
@@ -851,10 +856,10 @@ object GpuDataset {
   }
 
   private def copyBlocksData(
-                                     in: FSDataInputStream,
-                                     out: HostMemoryBufferOutputStream,
-                                     blocks: Seq[BlockMetaData],
-                                     split: PartitionedFile): Seq[BlockMetaData] = {
+       in: FSDataInputStream,
+       out: HostMemoryBufferOutputStream,
+       blocks: Seq[BlockMetaData],
+       split: PartitionedFile): Seq[BlockMetaData] = {
     var totalRows: Long = 0
     val copyBuffer = new Array[Byte](128 * 1024)
     val outputBlocks = new ArrayBuffer[BlockMetaData](blocks.length)
@@ -894,8 +899,9 @@ object GpuDataset {
   }
 
 
-  private def newParquetBlock(rowCount: Long,
-                              columns: Seq[ColumnChunkMetaData]): BlockMetaData = {
+  private def newParquetBlock(
+      rowCount: Long,
+      columns: Seq[ColumnChunkMetaData]): BlockMetaData = {
     val block = new BlockMetaData
     block.setRowCount(rowCount)
 
@@ -909,10 +915,10 @@ object GpuDataset {
   }
 
   private def copyColumnData(
-                              column: ColumnChunkMetaData,
-                              in: FSDataInputStream,
-                              out: OutputStream,
-                              copyBuffer: Array[Byte]): Unit = {
+       column: ColumnChunkMetaData,
+       in: FSDataInputStream,
+       out: OutputStream,
+       copyBuffer: Array[Byte]): Unit = {
     if (in.getPos != column.getStartingPos) {
       in.seek(column.getStartingPos)
     }
@@ -928,9 +934,10 @@ object GpuDataset {
 
 
 
-  private def writeFooter(out: OutputStream,
-                          blocks: Seq[BlockMetaData],
-                          parquetSchema: MessageType): Unit = {
+  private def writeFooter(
+      out: OutputStream,
+      blocks: Seq[BlockMetaData],
+      parquetSchema: MessageType): Unit = {
     val PARQUET_CREATOR = "RAPIDS GpuDataset"
     val PARQUET_VERSION = 1
     val fileMeta = new FileMetaData(parquetSchema, Collections.emptyMap[String, String],
@@ -964,10 +971,10 @@ object GpuDataset {
 
 
   private def dumpParquetData(
-                               dumpPathPrefix: String,
-                               hmb: HostMemoryBuffer,
-                               dataLength: Long,
-                               conf: Configuration): Unit = {
+      dumpPathPrefix: String,
+      hmb: HostMemoryBuffer,
+      dataLength: Long,
+      conf: Configuration): Unit = {
     val (out, path) = createTempFile(conf, dumpPathPrefix)
     try {
       logger.info(s"Writing Parquet split data to $path")
@@ -986,8 +993,8 @@ object GpuDataset {
   }
 
   private def createTempFile(
-                              conf: Configuration,
-                              pathPrefix: String): (FSDataOutputStream, Path) = {
+      conf: Configuration,
+      pathPrefix: String): (FSDataOutputStream, Path) = {
     val fs = new Path(pathPrefix).getFileSystem(conf)
     val rnd = new Random
     var out: FSDataOutputStream = null

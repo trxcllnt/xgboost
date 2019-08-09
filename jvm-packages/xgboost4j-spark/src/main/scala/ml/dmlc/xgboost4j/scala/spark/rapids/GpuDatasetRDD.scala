@@ -38,7 +38,6 @@ import scala.collection.mutable.ArrayBuffer
 private[spark] class GpuDatasetRDD(
     @transient private val sparkSession: SparkSession,
     broadcastedConf: Broadcast[SerializableWritable[Configuration]],
-    dumpPrefix: String,
     readFunction: (Configuration, String, PartitionedFile) =>
       Option[Table with AutoCloseable],
     @transient val filePartitions: Seq[FilePartition],
@@ -46,12 +45,14 @@ private[spark] class GpuDatasetRDD(
   extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
 
   private val logger = LogFactory.getLog(classOf[GpuDatasetRDD])
+  private val dumpPrefix = sparkSession.sessionState.conf.
+    getConfString("spark.rapids.splits.debug-dump-prefix", null)
 
   // The resulting iterator will only return a single GpuColumnBatch.
   override def compute(split: Partition, context: TaskContext): Iterator[GpuColumnBatch] = {
     val conf: Configuration = broadcastedConf.value.value
-//    val sqlConf: SQLConf = broadcastedSqlConf.value.value
     val iterator = new Iterator[GpuColumnBatch] with AutoCloseable {
+
       private[this] var batchedTable = GpuDatasetRDD.buildBatch(conf, dumpPrefix, readFunction,
           split.asInstanceOf[FilePartition].files)
       private[this] var resultBatch: Option[GpuColumnBatch] =
