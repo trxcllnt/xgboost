@@ -621,12 +621,11 @@ object GpuDataset {
           val parquetOptions = buildParquetOptions(options, schema)
           var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
           val numColumns = table.getNumberOfColumns
-          // The parquet loader can load more columns than requested as it will
-          // always load a pandas index column if one is found.
+
           if (schema.length != numColumns) {
             table.close()
             throw new QueryExecutionException(s"Expected ${schema.length} columns " +
-              s"but only read ${numColumns} from $partFile")
+              s"but read ${numColumns} from $partFile, partFile may be broken")
           }
           if (castToFloat) {
             val columns = new Array[ColumnVector](numColumns)
