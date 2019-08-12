@@ -496,7 +496,9 @@ object GpuDataset {
     val iter = new Iterator[Row] with AutoCloseable {
       private val numRows = batch.getNumRows
       private val schema = batch.getSchema
-      private val converter = new RowConverter(schema)
+      private val timeUnits =
+        (0 until batch.getNumColumns).map(batch.getColumnVector(_).getTimeUnit)
+      private val converter = new RowConverter(schema, timeUnits)
       private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(batch.getNumColumns) +
         batch.getNumColumns * 8
       private var buffer: Long = _
