@@ -717,7 +717,7 @@ object GpuDataset {
     var totalSize: Long = 0L
     var hmb = HostMemoryBuffer.allocate(estimatedHostBufferSize(conf, partFile))
     try {
-      val lineReader = new HadoopFileLinesReader(partFile, Some(seperator), conf)
+      val lineReader = new HadoopFileLinesReader(partFile, conf)
       try {
         while (lineReader.hasNext) {
           val line = lineReader.next()
