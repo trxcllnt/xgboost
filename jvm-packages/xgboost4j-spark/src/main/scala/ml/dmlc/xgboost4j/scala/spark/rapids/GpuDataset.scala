@@ -972,7 +972,7 @@ object GpuDataset {
       hmb: HostMemoryBuffer,
       dataLength: Long,
       conf: Configuration): Unit = {
-    val (out, path) = createTempFile(conf, dumpPathPrefix)
+    val (out, path) = FileUtils.createTempFile(conf, dumpPathPrefix, ".parquet")
     try {
       logger.info(s"Writing Parquet split data to $path")
       val buffer = new Array[Byte](128 * 1024)
@@ -987,26 +987,6 @@ object GpuDataset {
     } finally {
       out.close()
     }
-  }
-
-  private def createTempFile(
-      conf: Configuration,
-      pathPrefix: String): (FSDataOutputStream, Path) = {
-    val fs = new Path(pathPrefix).getFileSystem(conf)
-    val rnd = new Random
-    var out: FSDataOutputStream = null
-    var path: Path = null
-    var succeeded = false
-    while (!succeeded) {
-      path = new Path(pathPrefix + rnd.nextInt(Integer.MAX_VALUE) + ".parquet")
-      if (!fs.exists(path)) {
-        scala.util.control.Exception.ignoring(classOf[FileAlreadyExistsException]) {
-          out = fs.create(path, false)
-          succeeded = true
-        }
-      }
-    }
-    (out, path)
   }
 
 
