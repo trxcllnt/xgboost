@@ -30,6 +30,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile, SchemaColumnConvertNotSupportedException}
 import org.apache.spark.sql.execution.QueryExecutionException
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
 
 import scala.collection.mutable.ArrayBuffer
@@ -37,18 +38,22 @@ import scala.collection.mutable.ArrayBuffer
 private[spark] class GpuDatasetRDD(
     @transient private val sparkSession: SparkSession,
     broadcastedConf: Broadcast[SerializableWritable[Configuration]],
-    readFunction: (Configuration, PartitionedFile) => Option[Table with AutoCloseable],
+    readFunction: (Configuration, String, PartitionedFile) =>
+      Option[Table with AutoCloseable],
     @transient val filePartitions: Seq[FilePartition],
     schema: StructType)
   extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
 
   private val logger = LogFactory.getLog(classOf[GpuDatasetRDD])
+  private val dumpPrefix = sparkSession.sessionState.conf.
+    getConfString("spark.rapids.splits.debug-dump-prefix", null)
 
   // The resulting iterator will only return a single GpuColumnBatch.
   override def compute(split: Partition, context: TaskContext): Iterator[GpuColumnBatch] = {
     val conf: Configuration = broadcastedConf.value.value
     val iterator = new Iterator[GpuColumnBatch] with AutoCloseable {
-      private[this] var batchedTable = GpuDatasetRDD.buildBatch(conf, readFunction,
+
+      private[this] var batchedTable = GpuDatasetRDD.buildBatch(conf, dumpPrefix, readFunction,
           split.asInstanceOf[FilePartition].files)
       private[this] var resultBatch: Option[GpuColumnBatch] =
           batchedTable.map({ new GpuColumnBatch(_, schema) })
@@ -100,7 +105,8 @@ private[spark] class GpuDatasetRDD(
 private[spark] object GpuDatasetRDD {
 
   private def buildBatch(conf: Configuration,
-                         readFunc: (Configuration, PartitionedFile) => Option[Table],
+                         dumpPrefix: String,
+                         readFunc: (Configuration, String, PartitionedFile) => Option[Table],
                          partfiles: Seq[PartitionedFile]): Option[Table] = {
     var result: Option[Table] = None
     if (partfiles.isEmpty) {
@@ -110,14 +116,7 @@ private[spark] object GpuDatasetRDD {
     val tables = ArrayBuffer[Table]()
     try {
       for ((partfile, i) <- partfiles.zipWithIndex) {
-        readPartFile(conf, readFunc, partfile) match {
-          case Some(table) => {
-            tables.append(table)
-          }
-          case None => {
-            // do nothing
-          }
-        }
+        readPartFile(conf, dumpPrefix, readFunc, partfile).foreach(tables.append(_))
       }
       result = if (tables.length > 1) {
         Some(Table.concatenate(tables: _*))
@@ -134,10 +133,11 @@ private[spark] object GpuDatasetRDD {
 
   private def readPartFile(
       conf: Configuration,
-      readFunc: (Configuration, PartitionedFile) => Option[Table],
+      dumpPrefix: String,
+      readFunc: (Configuration, String, PartitionedFile) => Option[Table],
       partfile: PartitionedFile): Option[Table] = {
     try {
-      readFunc(conf, partfile)
+      readFunc(conf, dumpPrefix, partfile)
     } catch {
       case e: FileNotFoundException =>
         throw new FileNotFoundException(
