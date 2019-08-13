@@ -280,11 +280,51 @@ class GpuDatasetSuite extends FunSuite with PerTest {
         b.getColumnVector(2).sum().getLong,
         b.getColumnVector(3).sum().getLong,
         b.getColumnVector(4).sum().getLong))
-    println(rdd.mapPartitions(iter => Iterator(iter.length)).collect().size)
+    assertResult(2) {rdd.getNumPartitions}
     val counts = rdd.collect
     csvSplitColumnSumVerification(counts)
   }
 
+
+
+  test("auto split when loading parquet file") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 3000)
+
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(
+        b.getNumColumns, b.getNumRows
+      ))
+
+    assertResult(2) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
+  }
+
+  test("Parquet repartition when numPartitions is greater than numPartitionedFile") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val dataset = reader.parquet(getTestDataPath("/rank.train.parquet"))
+    assertResult(1) {dataset.partitions.length}
+
+    val newDataset = dataset.repartition(2)
+    assertResult(2) {newDataset.partitions.length}
+
+    val rdd = newDataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single(
+        b.getNumColumns, b.getNumRows
+      ))
+
+    assertResult(2) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    assertResult(1) {counts.length}
+    assertResult(5) {counts(0)._1}
+    assertResult(149) { counts(0)._2 }
+  }
 
   test("csv split when numPartitions is greater than numRows") {
     ss.conf.set("spark.sql.files.maxPartitionBytes", 3)
@@ -325,8 +365,6 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(2) {counts(0)_2}
     assertResult(3) {counts(0)_3}
   }
-
-
 
 
   private def getTestDataPath(resource: String): String = {
