@@ -173,6 +173,14 @@ void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols, int gpu_id)
   csr.n_rows = n_rows;
   csr.n_cols = n_cols;
   CUDFToCSR(cols, n_cols, &csr);
+
+  // Since training copies the data back to the host (as it assumes the dataset
+  // is on the host always), move the data from the device to the host. There is
+  // no use for the data to sit on the device, if training doesn't use it.
+  // Effect this by resharding to an empty device set. This will draw the data
+  // from the device to the system memory
+  page_.data.Reshard(GPUDistribution());
+  page_.offset.Reshard(GPUDistribution());
 }
 
 }  // namespace data
