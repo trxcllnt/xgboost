@@ -278,6 +278,15 @@ class XGBoostRegressionModel private[ml] (
     _booster.predict(data = dm)(0)(0)
   }
 
+  private def getMissingValue: Float = {
+    val missing = getMissing
+    if (!missing.isNaN && missing != 0.0f) {
+      throw new RuntimeException(s"you can only specify missing value as 0.0 (the currently" +
+        s" set value $missing) when you load data from GPU")
+    }
+    0.0f
+  }
+
   private def transformInternal(dataset: GpuDataset): DataFrame = {
     val schema = StructType(dataset.schema.fields ++
       Seq(StructField(name = _originalPredictionCol, dataType =
@@ -299,6 +308,7 @@ class XGBoostRegressionModel private[ml] (
         s"Expect [${featuresColNames.mkString(", ")}], " +
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
+    val missing = getMissingValue
     val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
       val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
       // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
@@ -310,7 +320,7 @@ class XGBoostRegressionModel private[ml] (
         gpuId = -1;
       }
       val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
-      val dm = new DMatrix(gdfColsHandles(0), gpuId)
+      val dm = new DMatrix(gdfColsHandles(0), gpuId, missing)
 
       Rabit.init(rabitEnv.asJava)
       try {

@@ -191,10 +191,10 @@ int XGDMatrixCreateFromDataIter(
 
 #ifdef XGBOOST_USE_CUDF
 int XGDMatrixCreateFromCUDF
-(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id) {
+(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id, bst_float missing) {
   API_BEGIN();
   std::unique_ptr<data::SimpleCSRSource> source(new data::SimpleCSRSource());
-  source->InitFromCUDF(cols, n_cols, gpu_id);
+  source->InitFromCUDF(cols, n_cols, gpu_id, missing);
   *out = new std::shared_ptr<DMatrix>(DMatrix::Create(std::move(source)));
   API_END();
 }
