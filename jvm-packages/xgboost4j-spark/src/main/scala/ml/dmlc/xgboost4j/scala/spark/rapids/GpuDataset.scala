@@ -585,7 +585,7 @@ object GpuDataset {
           schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
           val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
             partFile.start == 0),
-            dataBuffer, dataSize)
+            dataBuffer, 0, dataSize)
 
           val numColumns = table.getNumberOfColumns
           if (schema.length != numColumns) {
@@ -621,7 +621,7 @@ object GpuDataset {
             dumpParquetData(dumpPrefix, dataBuffer, dataSize, conf)
           }
           val parquetOptions = buildParquetOptions(options, schema)
-          var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
+          var table = Table.readParquet(parquetOptions, dataBuffer, 0, dataSize)
           val numColumns = table.getNumberOfColumns
 
           if (schema.length != numColumns) {
