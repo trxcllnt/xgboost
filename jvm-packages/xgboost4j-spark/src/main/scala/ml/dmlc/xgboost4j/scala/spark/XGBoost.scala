@@ -526,8 +526,8 @@ object XGBoost extends Serializable {
       checkpointRound: Int,
       prevBooster: Booster): RDD[(Booster, Map[String, Array[Float]])] = {
     val updatedParams = parameterOverrideToUseGPU(params)
-    val (nWorkers, _, useExternalMemory, obj, eval, _, _, _, _, _) = parameterFetchAndValidation(
-      updatedParams, sc)
+    val (nWorkers, _, useExternalMemory, obj, eval, missing, _, _, _, _) =
+      parameterFetchAndValidation(updatedParams, sc)
     // Start training
     if (noEvalSet) {
       // Get the indices here at driver side to avoid passing the whole Map to executor(s)
@@ -545,7 +545,7 @@ object XGBoost extends Serializable {
           }
           val gdfColsHandles = colIndicesForTrain.map(_.map(columnBatch.getColumn))
           val watches = Watches.buildWatches(getCacheDirName(useExternalMemory),
-            gdfColsHandles, gpuId)
+            gdfColsHandles, gpuId, missing)
           buildDistributedBooster(watches, paramsWithGpuId, rabitEnv, checkpointRound,
             obj, eval, prevBooster)
       }.cache()
@@ -562,7 +562,7 @@ object XGBoost extends Serializable {
             paramsWithGpuId = updatedParams + ("gpu_id" -> gpuId.toString())
           }
           val watches = Watches.buildWatches(getCacheDirName(useExternalMemory), nameAndColHandles,
-            gpuId)
+            gpuId, missing)
           buildDistributedBooster(watches, paramsWithGpuId, rabitEnv, checkpointRound,
             obj, eval, prevBooster)
       }.cache()
@@ -857,11 +857,19 @@ private object Watches {
     }
   }
 
-  private def newDMatrixFromGdfColumns(gdfColHandles: Seq[Array[Long]], gpuId: Int):
+  private def newDMatrixFromGdfColumns(gdfColHandles: Seq[Array[Long]], gpuId: Int, missing: Float):
       DMatrix = {
+
+    if (!missing.isNaN && missing != 0.0f) {
+      throw new RuntimeException(s"you can only specify missing value as 0.0 (the currently" +
+        s" set value $missing) when you load data from GPU")
+    }
+
+    val missingValue = 0.0f
+
     // Suppose gdf columns are given in this order: features, label, weight,
     // the same with that in 'checkAndGetGDFColumnIndices'.
-    val newDMatrix = new DMatrix(gdfColHandles(0), gpuId)
+    val newDMatrix = new DMatrix(gdfColHandles(0), gpuId, missingValue)
     newDMatrix.setCUDFInfo("label", gdfColHandles(1))
     if (gdfColHandles(2).nonEmpty) {
       newDMatrix.setCUDFInfo("weight", gdfColHandles(2))
@@ -869,19 +877,20 @@ private object Watches {
     newDMatrix
   }
 
-  def buildWatches(cachedDirName: Option[String], gdfColHandles: Seq[Array[Long]], gpuId: Int):
+  def buildWatches(cachedDirName: Option[String], gdfColHandles: Seq[Array[Long]],
+                   gpuId: Int, missing: Float):
       Watches = {
-    val trainMatrix = newDMatrixFromGdfColumns(gdfColHandles, gpuId)
+    val trainMatrix = newDMatrixFromGdfColumns(gdfColHandles, gpuId, missing)
     new Watches(Array(trainMatrix), Array("train"), cachedDirName)
   }
 
   def buildWatches(
       cachedDirName: Option[String],
       nameAndGdfColumns: Iterator[(String, Seq[Array[Long]])],
-      gpuId: Int):
+      gpuId: Int, missing: Float):
       Watches = {
     val dms = nameAndGdfColumns.map {
-      case (name, gdfColumns) => (name, newDMatrixFromGdfColumns(gdfColumns, gpuId))
+      case (name, gdfColumns) => (name, newDMatrixFromGdfColumns(gdfColumns, gpuId, missing))
     }.toArray
     new Watches(dms.map(_._2), dms.map(_._1), cachedDirName)
   }

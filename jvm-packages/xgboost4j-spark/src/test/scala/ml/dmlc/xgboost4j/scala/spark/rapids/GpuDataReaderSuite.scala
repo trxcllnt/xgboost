@@ -19,12 +19,13 @@ package ml.dmlc.xgboost4j.scala.spark.rapids
 import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.HadoopFsRelation
-import org.apache.spark.sql.types.{BooleanType, DoubleType, IntegerType, StructType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DoubleType, FloatType, IntegerType, StructType, TimestampType}
 import org.scalatest.FunSuite
 
 class GpuDataReaderSuite extends FunSuite with PerTest {
   private lazy val RANK_TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val RANK_TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
+  private lazy val SAMPLE_ORC_PATH = getTestDataPath("/sample.orc")
 
   test("csv parsing with DDL schema") {
     val reader = new GpuDataReaderForTest(ss)
@@ -97,6 +98,33 @@ class GpuDataReaderSuite extends FunSuite with PerTest {
     assertRankTrainLoad(reader)
   }
 
+  test("ORC parsing") {
+    val reader = new GpuDataReaderForTest(ss)
+    val dataset = reader.orc(SAMPLE_ORC_PATH)
+    assertOrcData(dataset, reader)
+  }
+
+  test("ORC parsing from load") {
+    val reader = new GpuDataReaderForTest(ss)
+    val dataset = reader.format("orc").load(SAMPLE_ORC_PATH)
+    assertOrcData(dataset, reader)
+  }
+
+  test("ORC parsing with schema") {
+    val reader = new GpuDataReaderForTest(ss)
+    val requiredSchema = new StructType()
+        .add("b", IntegerType)
+        .add("c", FloatType)
+    val dataset = reader.schema(requiredSchema).orc(SAMPLE_ORC_PATH)
+
+    assertOrcData(
+        dataset,
+        reader,
+        Seq(
+            ("b", IntegerType),
+            ("c", FloatType)))
+  }
+
   test("invalid format type specified") {
     val reader = new GpuDataReader(ss)
     assertThrows[UnsupportedOperationException] {
@@ -123,6 +151,30 @@ class GpuDataReaderSuite extends FunSuite with PerTest {
     assertResult("d") { schema.fields(3).name }
     assertResult(IntegerType) { schema.fields(4).dataType }
     assertResult("e") { schema.fields(4).name }
+  }
+
+  private def assertOrcData(
+      dataset: GpuDataset,
+      reader: GpuDataReaderForTest,
+      expectedSchema: Seq[(String, DataType)] = Seq(
+          ("a", BooleanType),
+          ("b", IntegerType),
+          ("c", FloatType),
+          ("d", DoubleType),
+          ("e", DateType),
+          ("f", TimestampType))
+  ): Unit = {
+    assert(dataset != null)
+
+    assertResult("orc") { reader.savedSourceType }
+    assertResult(1) { reader.savedRelation.inputFiles.length }
+
+    val schema = reader.savedRelation.schema
+    assertResult(expectedSchema.length) { schema.length }
+
+    for ((expected, actual) <- (expectedSchema, schema).zipped) {
+      assertResult((expected._1, expected._2)) { (actual.name, actual.dataType) }
+    }
   }
 
   private def getTestDataPath(resource: String): String = {

@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
 import java.util.Collections
 
-import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ParquetOptions, Table}
+import ai.rapids.cudf.{CSVOptions, ColumnVector, DType, HostMemoryBuffer, ORCOptions, ParquetOptions, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import org.apache.commons.logging.LogFactory
@@ -556,6 +556,7 @@ object GpuDataset {
     sourceType match {
       case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
       case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
+      case "orc" => getOrcPartFileReader(sparkSession, schema, options, castAllToFloats)
       case _ => throw new UnsupportedOperationException(
         s"Unsupported source type: $sourceType")
     }
@@ -585,7 +586,7 @@ object GpuDataset {
           schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
           val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options,
             partFile.start == 0),
-            dataBuffer, dataSize)
+            dataBuffer, 0, dataSize)
 
           val numColumns = table.getNumberOfColumns
           if (schema.length != numColumns) {
@@ -621,7 +622,7 @@ object GpuDataset {
             dumpParquetData(dumpPrefix, dataBuffer, dataSize, conf)
           }
           val parquetOptions = buildParquetOptions(options, schema)
-          var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
+          var table = Table.readParquet(parquetOptions, dataBuffer, 0, dataSize)
           val numColumns = table.getNumberOfColumns
 
           if (schema.length != numColumns) {
@@ -654,6 +655,58 @@ object GpuDataset {
     }
   }
 
+  private def getOrcPartFileReader(
+      sparkSession: SparkSession,
+      schema: StructType,
+      options: Map[String, String],
+      castToFloat: Boolean
+  ): (Configuration, String, PartitionedFile) => Option[Table] = {
+    // Try to build ORC options on the driver here to validate and fail fast.
+    // The other ORC option build below will occur on the executors.
+    buildOrcOptions(options, schema)
+
+    (configuration, dumpPrefix, partitionedFile) => {
+      val (dataBuffer, dataSize) = readPartFileFully(configuration, partitionedFile)
+      try {
+        val table = Table.readORC(
+            buildOrcOptions(options, schema),
+            dataBuffer,
+            0,
+            dataSize)
+
+        if (schema.length != table.getNumberOfColumns) {
+          table.close()
+          throw new IllegalStateException(
+              s"Expected ${schema.length} columns " +
+              s"but only read ${table.getNumberOfColumns} from ${partitionedFile}")
+        }
+
+        val columns = new Array[ColumnVector](schema.length)
+        try {
+          for (i <- 0 until schema.length) {
+            val c = table.getColumn(i)
+            columns(i) = schema(i).dataType match {
+              case _: NumericType => if (castToFloat) c.asFloats() else c.incRefCount()
+              // The GPU ORC reader always casts date and timestamp columns to DATE64.
+              // See https://github.com/rapidsai/cudf/issues/2384
+              // So casts it back for DATE32.
+              case _: DateType => c.asDate32()
+              case _ => c.incRefCount()
+            }
+          }
+          Some(new Table(columns: _*))
+        } finally {
+          table.close()
+          for (c <- columns if c != null) {
+            c.close()
+          }
+        }
+      } finally {
+        dataBuffer.close()
+      }
+    }
+  }
+
   private def buildCsvOptions(options: Map[String, String], isFirstSplit: Boolean): CSVOptions = {
     val builder = CSVOptions.builder()
     for ((k, v) <- options) {
@@ -678,6 +731,17 @@ object GpuDataset {
     val builder = ParquetOptions.builder()
     builder.includeColumn(schema.map(_.name): _*)
     builder.build
+  }
+
+  private def buildOrcOptions(options: Map[String, String], schema: StructType): ORCOptions = {
+    // currently no ORC read options are supported
+    if (options.nonEmpty) {
+      throw new UnsupportedOperationException("No ORC read options are supported")
+    }
+    ORCOptions
+        .builder()
+        .includeColumn(schema.map(_.name): _*)
+        .build
   }
 
   private def readPartFileFully(conf: Configuration,

@@ -16,6 +16,7 @@
 
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
+import java.sql.{Date, Timestamp}
 
 import ai.rapids.cudf.Cuda
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
@@ -28,6 +29,7 @@ import org.scalatest.FunSuite
 class GpuDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
   private lazy val TRAIN_PARQUET_PATH = getTestDataPath("/rank.train.parquet")
+  private lazy val SAMPLE_ORC_PATH = getTestDataPath("/sample.orc")
 
   override def sparkSessionBuilder: SparkSession.Builder = SparkSession.builder()
       .master("local[1]")
@@ -151,6 +153,49 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(1) { counts.length }
     assertResult(3) { counts(0)._1 }
     assertResult(149) { counts(0)._2 }
+  }
+
+  test("ORC parsing") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val data = new GpuDataReader(ss)
+      .orc(SAMPLE_ORC_PATH)
+      .buildRDD
+      .mapPartitions(_.flatMap(GpuDataset.columnBatchToRows))
+      .collect
+
+    assertResult(2) { data.length }
+
+    val firstRow = data.head
+    val secondRow = data.last
+    assertResult(false) { firstRow.getBoolean(0) }
+    assertResult(true) { secondRow.getBoolean(0) }
+    assertResult(2.0) { firstRow.getFloat(1) }
+    assertResult(5.5) { secondRow.getFloat(2) }
+    assertResult(6.25) { firstRow.getFloat(3) }
+    assertResult(Date.valueOf("2019-08-06")) { secondRow.getDate(4) }
+    assertResult(new Timestamp(1564999726000L)) { firstRow.getTimestamp(5) }
+  }
+
+  test("ORC parsing with raw types") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val data = new GpuDataReader(ss)
+      .option("asFloats", "false")
+      .orc(SAMPLE_ORC_PATH)
+      .buildRDD
+      .mapPartitions(_.flatMap(GpuDataset.columnBatchToRows))
+      .collect
+
+    assertResult(2) { data.length }
+
+    val firstRow = data.head
+    val secondRow = data.last
+    assertResult(false) { firstRow.getBoolean(0) }
+    assertResult(true) { secondRow.getBoolean(0) }
+    assertResult(2) { firstRow.getInt(1) }
+    assertResult(5.5) { secondRow.getFloat(2) }
+    assertResult(6.25) { firstRow.getDouble(3) }
+    assertResult(Date.valueOf("2019-08-06")) { secondRow.getDate(4) }
+    assertResult(new Timestamp(1564999726000L)) { firstRow.getTimestamp(5) }
   }
 
   test("buildRDD") {

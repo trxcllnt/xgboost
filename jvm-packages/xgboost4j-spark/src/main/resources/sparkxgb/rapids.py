@@ -74,3 +74,7 @@ class GpuDataReader(JavaWrapper):
     def parquet(self, *paths):
         paths = paths[0] if len(paths) == 1 else _jvm().PythonUtils.toSeq(paths)
         return GpuDataset(self._spark_session, self._java_obj.parquet(paths))
+
+    def orc(self, *paths):
+        paths = paths[0] if len(paths) == 1 else _jvm().PythonUtils.toSeq(paths)
+        return GpuDataset(self._spark_session, self._java_obj.orc(paths))

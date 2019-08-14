@@ -113,10 +113,11 @@ XGB_DLL int XGBRegisterLogCallback(void (*callback)(const char*));
  * \param n_cols number of CUDF columns
  * \param[out] out handle for the DMatrix built
  * \param gpu_id the gpu id to use
+ * \param missing missing value
  * \return 0 when success, -1 when failure happens
  */
 XGB_DLL int XGDMatrixCreateFromCUDF
-(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id);
+(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id, float missing);
 
 /*!
  * \brief Appends to a data matrix the CUDA data frame (CUDF)
@@ -124,6 +125,7 @@ XGB_DLL int XGDMatrixCreateFromCUDF
  * \param[in] n_cols number of CUDF columns
  * \param[in] handle to a previously built DMatrix (returned by XGDMatrixCreateFromCUDF)
  * \param[in] gpu_id the gpu id to use
+ * \param[in] missing missing value
  * Note: This API is used to incrementally build a dmatrix from CUDFs.
  *       The expected usage is for this API to be invoked after XGDMatrixCreateFromCUDF
  *       is invoked initially to build a dmatrix with a subset of rows.
@@ -132,7 +134,7 @@ XGB_DLL int XGDMatrixCreateFromCUDF
  * \return 0 when success, -1 when failure happens
  */
 XGB_DLL int XGDMatrixAppendCUDF
-(gdf_column **cols, size_t n_cols, DMatrixHandle handle, int gpu_id);
+(gdf_column **cols, size_t n_cols, DMatrixHandle handle, int gpu_idi, float missing);
 #endif
 
 /*!

@@ -273,10 +273,10 @@ extern void XGBAPISetLastError(const char* msg);
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixCreateFromCUDF
- * Signature: ([J[JI)I
+ * Signature: ([J[JIF)I
  */
 JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFromCUDF
-  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout, jint gpu_id) {
+  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout, jint gpu_id, jfloat missing) {
 #ifdef XGBOOST_USE_CUDF
   DMatrixHandle dhandle;
   jsize num_cols = jenv->GetArrayLength(jcols);
@@ -286,7 +286,8 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
     XGBAPISetLastError("Null columns");
     return -1;
   }
-  int ret = XGDMatrixCreateFromCUDF((gdf_column**)cols, (size_t)num_cols, &dhandle, gpu_id);
+  int ret = XGDMatrixCreateFromCUDF((gdf_column**)cols,
+      (size_t)num_cols, &dhandle, gpu_id, missing);
   if (cols != nullptr) {
     jenv->ReleaseLongArrayElements(jcols, cols, 0);
   }
