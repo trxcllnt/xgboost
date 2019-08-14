@@ -102,11 +102,12 @@ class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
    * create DMatrix from CUDF
    * @param data native handles of GDF columns
    * @param gpuId gpu id to use
+   * @param missing missing value
    * @throws ml.dmlc.xgboost4j.java.XGBoostError
    */
   @throws(classOf[XGBoostError])
-  def this(data: Array[Long], gpuId: Int) {
-    this(new JDMatrix(data, gpuId))
+  def this(data: Array[Long], gpuId: Int, missing: Float) {
+    this(new JDMatrix(data, gpuId, missing))
   }
 
   /**
@@ -116,7 +117,7 @@ class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
    */
   @throws(classOf[XGBoostError])
   def this(data: Array[Long]) {
-    this(data, 0)
+    this(data, 0, 0.0f)
   }
 
   /**

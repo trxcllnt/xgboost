@@ -58,10 +58,10 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixCreateFromCUDF
- * Signature: ([J[JI)I
+ * Signature: ([J[JIF)I
  */
 JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFromCUDF
-  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout, jint gpu_id);
+  (JNIEnv *jenv, jclass jcls, jlongArray jcols, jlongArray jout, jint gpu_id, jfloat missing);
 
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI

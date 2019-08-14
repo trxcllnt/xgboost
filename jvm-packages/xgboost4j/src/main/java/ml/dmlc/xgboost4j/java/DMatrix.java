@@ -159,7 +159,7 @@ public class DMatrix {
    * @throws XGBoostError native error
    */
   public DMatrix(long[] gdf_cols) throws XGBoostError  {
-    this(gdf_cols, 0);
+    this(gdf_cols, 0, 0.0f);
   }
 
   /**
@@ -169,13 +169,13 @@ public class DMatrix {
    * @param gpu_id   The gpu id to use
    * @throws XGBoostError native error
    */
-  public DMatrix(long[] gdf_cols, int gpu_id) throws XGBoostError {
+  public DMatrix(long[] gdf_cols, int gpu_id, float missing) throws XGBoostError {
     if (gdf_cols == null) {
       throw new NullPointerException("gdf_cols: null");
     }
     long[] out = new long[1];
     this.gpu_id = gpu_id;
-    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out, gpu_id));
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out, gpu_id, missing));
     handle = out[0];
   }
 

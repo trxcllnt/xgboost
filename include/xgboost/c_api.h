@@ -113,10 +113,11 @@ XGB_DLL int XGBRegisterLogCallback(void (*callback)(const char*));
  * \param n_cols number of CUDF columns
  * \param[out] out handle for the DMatrix built
  * \param gpu_id the gpu id to use
+ * \param missing missing value
  * \return 0 when success, -1 when failure happens
  */
 XGB_DLL int XGDMatrixCreateFromCUDF
-(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id);
+(gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id, float missing);
 #endif
 
 /*!

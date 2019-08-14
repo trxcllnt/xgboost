@@ -139,7 +139,8 @@ __global__ void determine_valid_rec_count_k
     ++offset[tid];
 }
 
-void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols, int gpu_id) {
+void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols,
+    int gpu_id, bst_float missing) {
   CHECK_GT(n_cols, 0);
   size_t n_rows = cols[0]->size;
   info.num_col_ = n_cols;
