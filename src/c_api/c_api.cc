@@ -200,11 +200,11 @@ int XGDMatrixCreateFromCUDF
 }
 
 int XGDMatrixAppendCUDF
-(gdf_column **cols, size_t n_cols, DMatrixHandle handle, int gpu_id) {
+(gdf_column **cols, size_t n_cols, DMatrixHandle handle, int gpu_id, bst_float missing) {
   API_BEGIN();
   // Create a new sparse page and append it to the existing one
   std::unique_ptr<data::SimpleCSRSource> source(new data::SimpleCSRSource());
-  source->InitFromCUDF(cols, n_cols, gpu_id);
+  source->InitFromCUDF(cols, n_cols, gpu_id, missing);
 
   auto dmat = static_cast<std::shared_ptr<DMatrix>*>(handle);
   size_t batch_count = 0;

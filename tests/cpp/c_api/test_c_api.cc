@@ -154,9 +154,11 @@ TEST(c_api, XGDMatrixCreateFromCUDFTest) {
 
     if (first_batch) {
       first_batch = false;
-      ASSERT_EQ(0, XGDMatrixCreateFromCUDF(&cols[0], minfo.num_col_, &dmat_handle, device_id));
+      ASSERT_EQ(0, XGDMatrixCreateFromCUDF(&cols[0], minfo.num_col_, &dmat_handle,
+                                           device_id, std::nanf("")));
     } else {
-      ASSERT_EQ(0, XGDMatrixAppendCUDF(&cols[0], minfo.num_col_, dmat_handle, device_id));
+      ASSERT_EQ(0, XGDMatrixAppendCUDF(&cols[0], minfo.num_col_, dmat_handle,
+                                       device_id, std::nanf("")));
     }
   }
 
