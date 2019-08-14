@@ -159,7 +159,7 @@ public class DMatrix {
    * @throws XGBoostError native error
    */
   public DMatrix(long[] gdf_cols) throws XGBoostError  {
-    this(gdf_cols, 0, 0.0f);
+    this(gdf_cols, 0, Float.NaN);
   }
 
   /**
