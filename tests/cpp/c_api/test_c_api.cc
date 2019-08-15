@@ -84,6 +84,25 @@ struct GDFColumn {
 };
 
 void
+CreateGdfColumnMetaInfo(size_t begin_row, size_t n_rows, const xgboost::MetaInfo &minfo,
+                        std::vector<GDFColumn> &gcols, int device_id) {
+  CHECK_EQ(1, gcols.size());
+  gcols[0].gcol->size = n_rows;
+  gcols[0].gcol->dtype = GDF_FLOAT32;
+  gcols[0].gcol->null_count = 0;
+
+  // Create the data on host first and copy it to device next
+  gcols[0].data.Reshard(xgboost::GPUDistribution(xgboost::GPUSet::All(device_id, 1)));
+  gcols[0].data.Resize(n_rows);
+
+  auto &data = gcols[0].data.HostVector();
+  const auto &src_data = minfo.labels_.HostVector();
+  data.insert(data.begin(), &src_data[begin_row], &src_data[begin_row + n_rows]);
+
+  gcols[0].gcol->data = gcols[0].data.DevicePointer(device_id);
+}
+
+void
 ConvertSparsePageToGdfColumns(const xgboost::SparsePage &sp, std::vector<GDFColumn> &gcols,
                               size_t batch_nrows, int device_id) {
   // Create a gdf_column
@@ -191,4 +210,65 @@ TEST(c_api, XGDMatrixCreateFromCUDFTest) {
 
   ASSERT_EQ(0, XGDMatrixFree(dmat_handle));
 }
+
+TEST(c_api, XGDMatrixXGDMatrixSetCUDFInfoTest) {
+  int constexpr kNRows = 1000, kNCols = 10;
+  int constexpr device_id = 0;
+
+  // Reference dmat
+  std::unique_ptr<xgboost::DMatrix> ref_dmat(
+    xgboost::CreateSparsePageDMatrixWithRC(kNRows, kNCols, 0, true));
+  xgboost::SparsePage ref_dmat_page(*ref_dmat->GetRowBatches().begin());
+  ref_dmat_page.SortRows();  // Sort rows as the test API may create features that are random
+
+  const xgboost::MetaInfo &ref_minfo = ref_dmat->Info();
+
+  // Create a dmat handle first
+  DMatrixHandle dmat_handle;
+  {
+    std::vector<GDFColumn> gcols(ref_minfo.num_col_);
+    auto sp = ref_dmat_page.GetTranspose(ref_minfo.num_col_);
+    ConvertSparsePageToGdfColumns(sp, gcols, ref_dmat_page.Size(), device_id);
+    std::vector<gdf_column *> cols;
+    std::for_each(gcols.begin(), gcols.end(),
+                  [&](const GDFColumn &col) { cols.push_back(col.gcol); });
+    ASSERT_EQ(0, XGDMatrixCreateFromCUDF(&cols[0], ref_minfo.num_col_, &dmat_handle,
+                                         device_id, std::nanf("")));
+  }
+
+  // Now set the meta info through the XGDMatrixAppendCUDFInfo API and compare the
+  // meta info from the handle to the one present in 'ref_dmat'
+  for (size_t i = 0; i < ref_dmat_page.Size(); ++i) {
+    std::vector<GDFColumn> gcols(1);
+    std::vector<gdf_column *> cols;
+    CreateGdfColumnMetaInfo(i, 1, ref_minfo, gcols, device_id);
+    std::for_each(gcols.begin(), gcols.end(),
+                  [&](const GDFColumn &col) { cols.push_back(col.gcol); });
+    ASSERT_EQ(0, XGDMatrixAppendCUDFInfo(dmat_handle, "label", &cols[0], cols.size(), device_id));
+  }
+
+  // Check if the dmat meta info tucked inside the handle matches the reference dmat
+  const auto handle_dmat = *(static_cast<std::shared_ptr<xgboost::DMatrix> *>(dmat_handle));
+  ASSERT_EQ(ref_minfo.num_row_, handle_dmat->Info().num_row_);
+  ASSERT_EQ(ref_minfo.num_col_, handle_dmat->Info().num_col_);
+  ASSERT_EQ(ref_minfo.num_nonzero_, handle_dmat->Info().num_nonzero_);
+  ASSERT_EQ(ref_minfo.labels_.HostVector(), handle_dmat->Info().labels_.HostVector());
+
+  // Test the set API
+  {
+    std::vector<GDFColumn> gcols(1);
+    std::vector<gdf_column *> cols;
+    CreateGdfColumnMetaInfo(0, ref_dmat_page.Size(), ref_minfo, gcols, device_id);
+    std::for_each(gcols.begin(), gcols.end(),
+                  [&](const GDFColumn &col) { cols.push_back(col.gcol); });
+    ASSERT_EQ(0, XGDMatrixSetCUDFInfo(dmat_handle, "label", &cols[0], cols.size(), device_id));
+  }
+  ASSERT_EQ(ref_minfo.num_row_, handle_dmat->Info().num_row_);
+  ASSERT_EQ(ref_minfo.num_col_, handle_dmat->Info().num_col_);
+  ASSERT_EQ(ref_minfo.num_nonzero_, handle_dmat->Info().num_nonzero_);
+  ASSERT_EQ(ref_minfo.labels_.HostVector(), handle_dmat->Info().labels_.HostVector());
+
+  ASSERT_EQ(0, XGDMatrixFree(dmat_handle));
+}
+#
 #endif

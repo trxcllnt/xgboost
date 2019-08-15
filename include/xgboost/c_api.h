@@ -298,7 +298,7 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
 
 #ifdef XGBOOST_USE_CUDF
 /*!
- * \brief set a vector to 
+ * \brief set the meta info of the dmatrix, overwriting existing info.
  * \param handle a instance of data matrix
  * \param field field name, can be label, weight
  * \param array pointer to float vector
@@ -306,12 +306,28 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
  * \param gpu_id id of gpu to use
  * \return 0 when success, -1 when failure happens
  */
-
 XGB_DLL int XGDMatrixSetCUDFInfo(DMatrixHandle handle,
-                                const char *field,
-                                gdf_column** gdf,
-                                size_t n_cols,
-                                int gpu_id);
+                                 const char *field,
+                                 gdf_column** gdf,
+                                 size_t n_cols,
+                                 int gpu_id);
+
+/*!
+ * \brief Append to the meta info of the dmatrix. This is a superset of
+ *        XGDMatrixSetCUDFInfo and can be used to augment the existing
+ *        meta info (even when the existing meta info is empty).
+ * \param handle a instance of data matrix
+ * \param field field name, can be label, weight
+ * \param array pointer to float vector
+ * \param len length of array
+ * \param gpu_id id of gpu to use
+ * \return 0 when success, -1 when failure happens
+ */
+XGB_DLL int XGDMatrixAppendCUDFInfo(DMatrixHandle handle,
+                                    const char *field,
+                                    gdf_column** gdf,
+                                    size_t n_cols,
+                                    int gpu_id);
 #endif
 
 /*!
