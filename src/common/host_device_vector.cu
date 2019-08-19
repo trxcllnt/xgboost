@@ -622,5 +622,6 @@ template class HostDeviceVector<GradientPair>;
 template class HostDeviceVector<int>;
 template class HostDeviceVector<Entry>;
 template class HostDeviceVector<size_t>;
+template class HostDeviceVector<unsigned char>;
 
 }  // namespace xgboost

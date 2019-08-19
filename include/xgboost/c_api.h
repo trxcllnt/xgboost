@@ -108,7 +108,7 @@ XGB_DLL int XGBRegisterLogCallback(void (*callback)(const char*));
 
 #ifdef XGBOOST_USE_CUDF
 /*!
- * \bried create a data matrix from a CUDA data frame (CUDF)
+ * \brief create a data matrix from a CUDA data frame (CUDF)
  * \param cols array of CUDF columns
  * \param n_cols number of CUDF columns
  * \param[out] out handle for the DMatrix built
@@ -118,6 +118,23 @@ XGB_DLL int XGBRegisterLogCallback(void (*callback)(const char*));
  */
 XGB_DLL int XGDMatrixCreateFromCUDF
 (gdf_column **cols, size_t n_cols, DMatrixHandle *out, int gpu_id, float missing);
+
+/*!
+ * \brief Appends to a data matrix the CUDA data frame (CUDF)
+ * \param[in] cols array of CUDF columns
+ * \param[in] n_cols number of CUDF columns
+ * \param[in] handle to a previously built DMatrix (returned by XGDMatrixCreateFromCUDF)
+ * \param[in] gpu_id the gpu id to use
+ * \param[in] missing missing value
+ * Note: This API is used to incrementally build a dmatrix from CUDFs.
+ *       The expected usage is for this API to be invoked after XGDMatrixCreateFromCUDF
+ *       is invoked initially to build a dmatrix with a subset of rows.
+ *       This API can then be subsequently invoked a number of times to append
+ *       to the dmatrix returned by the XGDMatrixCreateFromCUDF API.
+ * \return 0 when success, -1 when failure happens
+ */
+XGB_DLL int XGDMatrixAppendCUDF
+(gdf_column **cols, size_t n_cols, DMatrixHandle handle, int gpu_idi, float missing);
 #endif
 
 /*!
@@ -281,7 +298,7 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
 
 #ifdef XGBOOST_USE_CUDF
 /*!
- * \brief set a vector to 
+ * \brief set the meta info of the dmatrix, overwriting existing info.
  * \param handle a instance of data matrix
  * \param field field name, can be label, weight
  * \param array pointer to float vector
@@ -289,12 +306,28 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
  * \param gpu_id id of gpu to use
  * \return 0 when success, -1 when failure happens
  */
-
 XGB_DLL int XGDMatrixSetCUDFInfo(DMatrixHandle handle,
-                                const char *field,
-                                gdf_column** gdf,
-                                size_t n_cols,
-                                int gpu_id);
+                                 const char *field,
+                                 gdf_column** gdf,
+                                 size_t n_cols,
+                                 int gpu_id);
+
+/*!
+ * \brief Append to the meta info of the dmatrix. This is a superset of
+ *        XGDMatrixSetCUDFInfo and can be used to augment the existing
+ *        meta info (even when the existing meta info is empty).
+ * \param handle a instance of data matrix
+ * \param field field name, can be label, weight
+ * \param array pointer to float vector
+ * \param len length of array
+ * \param gpu_id id of gpu to use
+ * \return 0 when success, -1 when failure happens
+ */
+XGB_DLL int XGDMatrixAppendCUDFInfo(DMatrixHandle handle,
+                                    const char *field,
+                                    gdf_column** gdf,
+                                    size_t n_cols,
+                                    int gpu_id);
 #endif
 
 /*!

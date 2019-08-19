@@ -198,6 +198,31 @@ int XGDMatrixCreateFromCUDF
   *out = new std::shared_ptr<DMatrix>(DMatrix::Create(std::move(source)));
   API_END();
 }
+
+int XGDMatrixAppendCUDF
+(gdf_column **cols, size_t n_cols, DMatrixHandle handle, int gpu_id, bst_float missing) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  auto dmat = static_cast<std::shared_ptr<DMatrix>*>(handle);
+  MetaInfo &info = (*dmat)->Info();
+  CHECK_EQ(info.num_col_, n_cols);
+
+  // Create a new sparse page and append it to the existing one
+  std::unique_ptr<data::SimpleCSRSource> source(new data::SimpleCSRSource());
+  source->InitFromCUDF(cols, n_cols, gpu_id, missing);
+
+  size_t batch_count = 0;
+  for (auto &batch : (*dmat)->GetRowBatches()) {
+    batch.Push(source->page_);
+    ++batch_count;
+  }
+  CHECK_EQ(batch_count, 1);
+
+  // Update the meta info
+  info.num_row_ += source->info.num_row_;
+  info.num_nonzero_ += source->info.num_nonzero_;
+  API_END();
+}
 #endif
 
 XGB_DLL int XGDMatrixCreateFromCSREx(const size_t* indptr,
@@ -701,12 +726,11 @@ XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
 }
 
 #ifdef XGBOOST_USE_CUDF
-
 XGB_DLL int XGDMatrixSetCUDFInfo(DMatrixHandle handle,
                                 const char *field,
                                 gdf_column **cols,
                                 size_t n_cols,
-				int gpu_id) {
+                                int gpu_id) {
   API_BEGIN();
   CHECK_HANDLE();
   static_cast<std::shared_ptr<DMatrix>*>(handle)
@@ -714,6 +738,17 @@ XGB_DLL int XGDMatrixSetCUDFInfo(DMatrixHandle handle,
   API_END();
 }
 
+XGB_DLL int XGDMatrixAppendCUDFInfo(DMatrixHandle handle,
+                                    const char *field,
+                                    gdf_column **cols,
+                                    size_t n_cols,
+                                    int gpu_id) {
+  API_BEGIN();
+  CHECK_HANDLE();
+  static_cast<std::shared_ptr<DMatrix>*>(handle)
+    ->get()->Info().AppendCUDFInfo(field, cols, n_cols, gpu_id);
+  API_END();
+}
 #endif
 
 XGB_DLL int XGDMatrixSetUIntInfo(DMatrixHandle handle,

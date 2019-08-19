@@ -146,7 +146,7 @@ __global__ void determine_valid_rec_count_k(void* cudf_data, gdf_dtype dtype, gd
 }
 
 void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols,
-    int gpu_id, bst_float missing) {
+                                   int gpu_id, bst_float missing) {
   CHECK_GT(n_cols, 0);
   size_t n_rows = cols[0]->size;
   info.num_col_ = n_cols;
@@ -182,6 +182,14 @@ void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols,
 
   csr.data = page_.data.DevicePointer(device_id);
   CUDFToCSR(cols, &csr);
+
+  // Since training copies the data back to the host (as it assumes the dataset
+  // is on the host always), move the data from the device to the host. There is
+  // no use for the data to sit on the device, if training doesn't use it.
+  // Effect this by resharding to an empty device set. This will draw the data
+  // from the device to the system memory
+  page_.data.Reshard(GPUDistribution());
+  page_.offset.Reshard(GPUDistribution());
 }
 
 }  // namespace data
