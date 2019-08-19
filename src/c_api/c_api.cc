@@ -730,7 +730,7 @@ XGB_DLL int XGDMatrixSetCUDFInfo(DMatrixHandle handle,
                                 const char *field,
                                 gdf_column **cols,
                                 size_t n_cols,
-				                int gpu_id) {
+                                int gpu_id) {
   API_BEGIN();
   CHECK_HANDLE();
   static_cast<std::shared_ptr<DMatrix>*>(handle)
@@ -742,7 +742,7 @@ XGB_DLL int XGDMatrixAppendCUDFInfo(DMatrixHandle handle,
                                     const char *field,
                                     gdf_column **cols,
                                     size_t n_cols,
-				                    int gpu_id) {
+                                    int gpu_id) {
   API_BEGIN();
   CHECK_HANDLE();
   static_cast<std::shared_ptr<DMatrix>*>(handle)
