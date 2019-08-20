@@ -30,7 +30,7 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
     GpuDatasetData.regressionCleanUp()
   }
 
-  test("test XGBoost-Spark XGBoostRegressor setFeaturesCols") {
+  test("GPU Regression test set multiple feature columns") {
     val regressor = new XGBoostRegressor(Map("objective" -> "reg:squarederror"))
       .setFeaturesCols(Seq("gdfCol1", "gdfCol2"))
     assert(regressor.getFeaturesCols.contains("gdfCol1"))
@@ -38,7 +38,7 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
     assert(regressor.getFeaturesCols.length == 2)
   }
 
-  test("test XGBoost-Spark XGBoostRegressor the overloaded 'fit' should work with GpuDataset") {
+  test("GPU Regression test the overloaded 'fit' should work with GpuDataset") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -309,5 +309,20 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
     assert(resultDF.count === groundTruth)
     assert(resultDF.columns.contains("predictLeaf"))
     assert(resultDF.columns.contains("predictContrib"))
+  }
+
+  test("GPU Regression test ranking: use group data") {
+    val paramMap = Map("eta" -> "1", "max_depth" -> "6", "silent" -> "1",
+      "objective" -> "rank:pairwise", "num_workers" -> 1, "num_round" -> 5,
+      "group_col" -> "group")
+
+    val trainingDF = GpuDatasetData.getRankingTrainGpuDataset(ss)
+    val (testDF, testRowCount) = GpuDatasetData.getRankingTestGpuDataset(ss)
+    val model = new XGBoostRegressor(paramMap)
+      .setFeaturesCols(GpuDatasetData.rankingFeatureCols)
+      .fit(trainingDF)
+
+    val prediction = model.transform(testDF).collect()
+    assert(testRowCount === prediction.length)
   }
 }

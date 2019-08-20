@@ -31,13 +31,20 @@ object GpuDatasetData {
 
   private val classifierTrainDataPath = "/iris.data.csv"
   private val classifierTestDataPath = "/iris.test.data.csv"
-
   private val classifierSchema = new StructType(Array(
     StructField("sepal length", FloatType),
     StructField("sepal width", FloatType),
     StructField("petal length", FloatType),
     StructField("petal width", FloatType),
     StructField("classIndex", FloatType)))
+
+  def getClassifierTrainGpuDataset(spark: SparkSession): GpuDataset = {
+    getTrainGpuDataset(spark, classifierSchema, classifierTrainDataPath)
+  }
+
+  def getClassifierTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
+    getTestGpuDataset(spark, classifierSchema, classifierTestDataPath)
+  }
 
   private val regressionTrainDataPath = "/norank.train.csv"
   private val regressionTestDataPath = "/norank.train.csv"
@@ -47,46 +54,43 @@ object GpuDatasetData {
     StructField("d", DoubleType),
     StructField("e", DoubleType)))
 
-  private def toDType(dataType: DataType): DType = {
-    dataType match {
-      case BooleanType | ByteType => DType.INT8
-      case ShortType => DType.INT16
-      case IntegerType => DType.INT32
-      case LongType => DType.INT64
-      case FloatType => DType.FLOAT32
-      case DoubleType => DType.FLOAT64
-      case DateType => DType.DATE32
-      case TimestampType => DType.TIMESTAMP
-      case unknownType => throw new UnsupportedOperationException(
-        s"Unsupported Spark SQL type $unknownType")
-    }
-  }
-
-  def getClassifierTrainGpuDataset(spark: SparkSession): GpuDataset = {
-    val reader = new GpuDataReader(spark)
-    reader.schema(classifierSchema).csv(getTestDataPath(classifierTrainDataPath))
-  }
-
-  def getClassifierTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
-    val reader = new GpuDataReader(spark)
-    val test = reader.schema(classifierSchema).csv(getTestDataPath(classifierTestDataPath))
-
-    val counts = test.mapColumnarSingleBatchPerPartition(columnBatch => {
-      Iterator.single(columnBatch.getNumRows)
-    }).collect()
-
-    (test, counts(0))
-  }
-
   def getRegressionTrainGpuDataset(spark: SparkSession): GpuDataset = {
-    val reader = new GpuDataReader(spark)
-    reader.schema(regressionSchema).csv(getTestDataPath(regressionTrainDataPath))
+    getTrainGpuDataset(spark, regressionSchema, regressionTrainDataPath)
   }
 
   def getRegressionTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
-    val reader = new GpuDataReader(spark)
-    val test = reader.schema(regressionSchema).csv(getTestDataPath(regressionTestDataPath))
+    getTestGpuDataset(spark, regressionSchema, regressionTestDataPath)
+  }
 
+  private val rankingTrainDataPath = "/rank.train.csv"
+  private val rankingTestDataPath = "/rank.test.csv"
+  private val rankingSchema = new StructType(Array(
+    StructField("label", FloatType),
+    StructField("b", FloatType),
+    StructField("c", FloatType),
+    StructField("d", FloatType),
+    StructField("group", IntegerType)))
+
+  def getRankingTrainGpuDataset(spark: SparkSession): GpuDataset = {
+    getTrainGpuDataset(spark, rankingSchema, rankingTrainDataPath)
+  }
+
+  def getRankingTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
+    getTestGpuDataset(spark, rankingSchema, rankingTestDataPath)
+  }
+
+  private def getTrainGpuDataset(
+      spark: SparkSession,
+      schema: StructType,
+      path: String): GpuDataset = {
+    new GpuDataReader(spark).schema(schema).csv(getTestDataPath(path))
+  }
+
+  private def getTestGpuDataset(
+      spark: SparkSession,
+      schema: StructType,
+      path: String): (GpuDataset, Long) = {
+    val test = new GpuDataReader(spark).schema(schema).csv(getTestDataPath(path))
     val counts = test.mapColumnarSingleBatchPerPartition(columnBatch => {
       Iterator.single(columnBatch.getNumRows)
     }).collect()
@@ -116,6 +120,21 @@ object GpuDatasetData {
       if (needTableClose) {
         table.close()
       }
+    }
+  }
+
+  private def toDType(dataType: DataType): DType = {
+    dataType match {
+      case BooleanType | ByteType => DType.INT8
+      case ShortType => DType.INT16
+      case IntegerType => DType.INT32
+      case LongType => DType.INT64
+      case FloatType => DType.FLOAT32
+      case DoubleType => DType.FLOAT64
+      case DateType => DType.DATE32
+      case TimestampType => DType.TIMESTAMP
+      case unknownType => throw new UnsupportedOperationException(
+        s"Unsupported Spark SQL type $unknownType")
     }
   }
 
@@ -184,5 +203,8 @@ object GpuDatasetData {
 
   lazy val regressionFeatureCols: Seq[String] =
     regressionSchema.fieldNames.filter(_ != "e")
+
+  lazy val rankingFeatureCols: Seq[String] =
+    rankingSchema.fieldNames.filter(_ != "group").filter(_ != "label")
 }
 

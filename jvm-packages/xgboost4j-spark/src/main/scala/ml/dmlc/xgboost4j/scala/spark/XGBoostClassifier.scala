@@ -247,16 +247,18 @@ class XGBoostClassifier (
     val _numClasses = getNumberClasses(dataset)
     this.logInfo(s"Got 'numClass'=${_numClasses} for GpuDataset")
     if (isDefined(numClass)) {
-      require((_numClasses == 2 && $(numClass) == 1) ||
-        (_numClasses != 2 && _numClasses == $(numClass)),
-        "Invalid param 'num_class', suppose to be '1' for binary classification" +
-          " and value (> 2) for multiple classification!")
+      val expectedNumClasses = if (_numClasses <= 2) 1 else _numClasses
+      require($(numClass) == expectedNumClasses, "The number of classes in Dataset doesn't match " +
+        "\'num_class\' in parameters.")
     } else {
-      require(_numClasses == 2, "Param 'num_class' should be set for multiple classification!")
+      require(_numClasses <= 2, "Param 'num_class' should be set for multiple classification!")
     }
+    val weightColName = if (isDefined(weightCol)) $(weightCol) else null
+    val colNames = XGBoost.buildGDFColumnNames($(featuresCols), $(labelCol),
+      weightColName, null)
     val derivedXGBParamMap = MLlib2XGBoostParams
-    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, derivedXGBParamMap,
-      getGpuEvalSets(xgboostParams), false)
+    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, colNames,
+      derivedXGBParamMap, getGpuEvalSets(xgboostParams))
     val model = new XGBoostClassificationModel(uid, _numClasses, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)

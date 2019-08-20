@@ -206,11 +206,13 @@ class XGBoostRegressor (
     if (isDefined(customObj) && $(customObj) != null) {
       set(objectiveType, "regression")
     }
-
+    val weightColName = if (isDefined(weightCol)) $(weightCol) else null
+    val groupColName = if (isDefined(groupCol)) $(groupCol) else null
+    val colNames = XGBoost.buildGDFColumnNames($(featuresCols), $(labelCol),
+      weightColName, groupColName)
     val derivedXGBParamMap = MLlib2XGBoostParams
-    // No group support for GpuDataset
-    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, derivedXGBParamMap,
-      getGpuEvalSets(xgboostParams), false)
+    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, colNames,
+      derivedXGBParamMap, getGpuEvalSets(xgboostParams))
     val model = new XGBoostRegressionModel(uid, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)
