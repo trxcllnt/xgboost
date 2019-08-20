@@ -16,6 +16,9 @@
 
 package ml.dmlc.xgboost4j.java.spark.rapids;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import ai.rapids.cudf.ColumnVector;
 
 import ai.rapids.cudf.Table;
@@ -49,5 +52,75 @@ public class GpuColumnBatch {
   public long getColumn(int index) {
     ColumnVector v = table.getColumn(index);
     return v.getNativeCudfColumnAddress();
+  }
+
+  public int[] groupByColumnWithCountHost(int groupIndex) {
+    ColumnVector cv = getColumnVector(groupIndex);
+    cv.ensureOnHost();
+    List<Integer> countData = new ArrayList<>();
+    int groupId = 0, groupSize = 0;
+    for (int i = 0; i < cv.getRowCount(); i ++) {
+      if(groupId != cv.getInt(i)) {
+        groupId = cv.getInt(i);
+        if (groupSize > 0) {
+          countData.add(groupSize);
+        }
+        groupSize = 1;
+      } else {
+        groupSize ++;
+      }
+    }
+    if (groupSize > 0) {
+      countData.add(groupSize);
+    }
+    int[] counts = new int[countData.size()];
+    for (int i = 0; i < counts.length; i ++) {
+      counts[i] = countData.get(i);
+    }
+    return counts;
+  }
+
+  /**
+   * This is used to group the CUDF Dataset by column 'groupIndex', and merge all the rows into
+   * one row in each group based on column 'oneIndex'. For example
+   * 1 0
+   * 2 3   (0, 1, true)   0
+   * 2 3        =>        3
+   * 5 6                  6
+   * 5 6
+   * And the last row in each group is selected.
+   * @param groupIndex The index of column to group by
+   * @param oneIndex The index of column to get one value in each group
+   * @param checkEqual Whether to check all the values in one group are the same
+   * @return The native handle of the result column containing the merged data.
+   */
+  public long[] groupByColumnWithAggregation(int groupIndex, int oneIndex, boolean checkEqual) {
+    ColumnVector cv = getColumnVector(groupIndex);
+    cv.ensureOnHost();
+    ColumnVector aggrCV = getColumnVector(oneIndex);
+    aggrCV.ensureOnHost();
+    List<Float> onesData = new ArrayList<>();
+    int groupId = 0;
+    Float oneValue = null;
+    for (int i = 0; i < cv.getRowCount(); i ++) {
+      if(groupId != cv.getInt(i)) {
+        groupId = cv.getInt(i);
+        if (oneValue != null) {
+          onesData.add(oneValue);
+        }
+        oneValue = aggrCV.getFloat(i);
+      } else {
+        if (checkEqual && oneValue != null && oneValue != aggrCV.getFloat(i)) {
+          return null;
+        }
+      }
+    }
+    if (oneValue != null) {
+      onesData.add(oneValue);
+    }
+    // FIXME how to release this ColumnVector?
+    ColumnVector retCV = ColumnVector.fromBoxedFloats(onesData.toArray(new Float[]{}));
+    retCV.ensureOnDevice();
+    return new long[] {retCV.getNativeCudfColumnAddress()};
   }
 }
