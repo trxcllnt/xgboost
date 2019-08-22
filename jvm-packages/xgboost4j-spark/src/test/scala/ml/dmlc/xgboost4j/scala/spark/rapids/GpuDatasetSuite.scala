@@ -142,6 +142,30 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     assertResult(149) { counts(0)._2 }
   }
 
+  test("Parquet parsing with load") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val dataset = reader.format("parquet").load(TRAIN_PARQUET_PATH)
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single((b.getNumColumns, b.getNumRows)))
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
+  }
+
+  test("Parquet parsing with path option") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val dataset = reader.format("parquet").option("path", TRAIN_PARQUET_PATH).load()
+    val rdd = dataset.mapColumnarSingleBatchPerPartition((b: GpuColumnBatch) =>
+      Iterator.single((b.getNumColumns, b.getNumRows)))
+    val counts = rdd.collect
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)._1 }
+    assertResult(149) { counts(0)._2 }
+  }
+
   test("Parquet subset parsing") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)

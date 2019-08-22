@@ -122,7 +122,8 @@ class GpuDataReader(sparkSession: SparkSession) {
       userSpecifiedSchema = specifiedSchema,
       className = source,
       options = optionsMap).resolveRelation()
-    createDataset(fsRelation.asInstanceOf[HadoopFsRelation], sourceType, optionsMap)
+    val restOptions = optionsMap.filterKeys(!_.equalsIgnoreCase("path"))
+    createDataset(fsRelation.asInstanceOf[HadoopFsRelation], sourceType, restOptions)
   }
 
   protected def createDataset(relation: HadoopFsRelation, sourceType: String,
