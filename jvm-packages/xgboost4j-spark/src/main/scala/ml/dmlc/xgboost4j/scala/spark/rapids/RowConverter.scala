@@ -113,13 +113,13 @@ private[xgboost4j] object RowConverter {
   }
 
   private object TimestampConverter extends TypeConverter {
-
+    private val NANOS_PER_MICROS: Long = 1000 // to work compatible with Spark 2.3.3
     private def toMicros(value: Long, unit: TimeUnit): Long = {
       unit match {
         case TimeUnit.SECONDS => value * DateTimeUtils.MICROS_PER_SECOND
         case TimeUnit.MILLISECONDS | TimeUnit.NONE => value * DateTimeUtils.MICROS_PER_MILLIS
         case TimeUnit.MICROSECONDS => value
-        case TimeUnit.NANOSECONDS => value / DateTimeUtils.NANOS_PER_MICROS
+        case TimeUnit.NANOSECONDS => value / NANOS_PER_MICROS
       }
     }
 

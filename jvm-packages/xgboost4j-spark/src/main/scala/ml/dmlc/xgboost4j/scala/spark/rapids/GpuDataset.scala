@@ -234,6 +234,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     fileType match {
       case "csv" => true
       case "parquet" => true
+      case "orc" => true
       case _ => false
     }
   }

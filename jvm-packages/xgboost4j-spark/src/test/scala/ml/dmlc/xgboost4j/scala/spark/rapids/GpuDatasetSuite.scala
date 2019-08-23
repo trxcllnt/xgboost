@@ -65,6 +65,7 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val firstRow = data.head
     assertResult(215) { data.length }
     assertResult(firstRow.size) { 5 }
+
     assertResult(false) { firstRow.getBoolean(0) }
     implicit val doubleEquality = TolerantNumerics.tolerantDoubleEquality(0.000000001)
     assert(firstRow.getDouble(1) === 985.574005058)
@@ -147,5 +148,3 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     getClass.getResource(resource).getPath
   }
 }
-
-
