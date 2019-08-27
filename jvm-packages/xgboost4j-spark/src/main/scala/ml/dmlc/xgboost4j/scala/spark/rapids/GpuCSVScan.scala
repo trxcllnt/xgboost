@@ -113,7 +113,7 @@ class CSVPartitionReader(
     maxRowsPerChunk: Integer) extends PartitionReader[GpuColumnBatch] {
   private var batch: Option[Table] = None
   private val separator = Array('\n'.toByte)
-  private val lineReader = new HadoopFileLinesReader(partFile, Some(separator), conf)
+  private val lineReader = new HadoopFileLinesReader(partFile, conf)
   private var isFirstChunkForIterator: Boolean = true
   private var isExhausted: Boolean = false
 

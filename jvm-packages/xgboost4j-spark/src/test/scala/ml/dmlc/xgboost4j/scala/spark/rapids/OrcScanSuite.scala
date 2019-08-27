@@ -22,7 +22,7 @@ import ml.dmlc.xgboost4j.scala.spark.PerTest
 import org.apache.spark.SparkConf
 import org.scalatest.FunSuite
 
-class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite {
+class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite{
   private lazy val SAMPLE_ORC_PATH = "/sample.orc"
 
   test("Test Orc parsing should be same for cpu and gpu ") {
@@ -61,19 +61,91 @@ class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       .buildRDD
       .mapPartitions(GpuDataset.columnBatchToRows)
       .collect
-
     assertResult(2) { data.length }
-
     val firstRow = data.head
     val secondRow = data.last
     assertResult(false) { firstRow.getBoolean(0) }
     assertResult(2) {  firstRow.getInt(1) }
     assertResult(6.25) { firstRow.getDouble(3) }
     assertResult(new Timestamp(1564999726000L)) { firstRow.getTimestamp(5) }
-
     assertResult(true) { secondRow.getBoolean(0) }
     assertResult(5.5) { secondRow.getFloat(2) }
     assertResult(Date.valueOf("2019-08-06")) { secondRow.getDate(4) }
   }
 
+  test("ORC split when loading, stripes not divided") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 2048)
+    assume(Cuda.isEnvCompatibleForTesting)
+    val dataPath = getTestDataPath("/2000rows.orc")
+    val dataset = new GpuDataReader(ss)
+      .orc(dataPath)
+    assertResult(2) {dataset.partitions.length}
+    val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
+    assertResult(2) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    orcUnproperSplitVerification(counts)
+
+  }
+
+
+  test("ORC split when loading, stripes get divided") {
+    ss.conf.set("spark.sql.files.maxPartitionBytes", 1024)
+    assume(Cuda.isEnvCompatibleForTesting)
+    val dataPath = getTestDataPath("/2000rows.orc")
+    val dataset = new GpuDataReader(ss)
+      .orc(dataPath)
+    assertResult(4) {dataset.partitions.length}
+    val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
+    assertResult(4) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    orcProperSplitVerification(counts)
+  }
+
+  test("ORC repartition, stripes get divided") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val dataPath = getTestDataPath("/2000rows.orc")
+    val dataset = new GpuDataReader(ss)
+      .orc(dataPath)
+    val newDataset = dataset.repartition(4)
+    assertResult(4) {newDataset.partitions.length}
+    val rdd = newDataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
+
+    assertResult(4) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    assertResult(8) { counts.length }
+    orcProperSplitVerification(counts)
+  }
+
+  test("ORC repartition, stripes not divided") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val dataPath = getTestDataPath("/2000rows.orc")
+    val dataset = new GpuDataReader(ss)
+      .orc(dataPath)
+    val newDataset = dataset.repartition(2)
+    assertResult(2) {newDataset.partitions.length}
+    val rdd = newDataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
+    assertResult(2) {rdd.getNumPartitions}
+    val counts = rdd.collect
+    orcUnproperSplitVerification(counts)
+  }
+
+  private def orcProperSplitVerification(counts: Array[(Long)]): Unit = {
+    assertResult(8) {counts.length}
+    assertResult(6) { counts(0) }
+    assertResult(1024) { counts(1) }
+    assertResult(6){ counts(2) }
+    assertResult(976) { counts(3) }
+    assertResult(0) { counts(4) }
+    assertResult(0) { counts(5) }
+    assertResult(0) { counts(6) }
+    assertResult(0) { counts(7) }
+  }
+
+  private def orcUnproperSplitVerification(counts: Array[(Long)]): Unit = {
+    assertResult(4) { counts.length }
+    assertResult(6) {counts(0)}
+    assertResult(2000) {counts(1)}
+    assertResult(0) {counts(2)}
+    assertResult(0) {counts(3)}
+  }
 }
