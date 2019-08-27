@@ -16,9 +16,10 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 import ml.dmlc.xgboost4j.java.{Rabit, XGBoostSparkJNI}
 import ml.dmlc.xgboost4j.scala.spark.params._
-import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
+import ml.dmlc.xgboost4j.scala.spark.rapids.{ColumnBatchToRow, GpuDataset}
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, EvalTrait, ObjectiveTrait, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.logging.LogFactory
@@ -225,7 +226,11 @@ class XGBoostClassifier (
       case Some(n: Int) => n
       case None =>
         // Attempt to automatically detect the number of classes from the label data.
-        val numClasses = dataset.findNumClasses($(labelCol))
+
+        val (numClasses, time) = GpuDataset.time("Find num classes") {
+          dataset.findNumClasses($(labelCol))
+        }
+        logDebug("Benchmark[Find num classes] " + time)
         require(numClasses <= maxNumClass, s"Classifier inferred $numClasses from label values" +
           s" in column $labelCol, but this exceeded the max numClasses ($maxNumClass) allowed" +
           s" to be inferred from values.  To avoid this error for labels with > $maxNumClass" +
@@ -375,8 +380,8 @@ class XGBoostClassificationModel private[ml](
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
     val missing = getMissingValue
-    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
-      val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+
+    val resultRDD = dataset.mapColumnarBatchPerPartition((iter: Iterator[GpuColumnBatch]) => {
       // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
       // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
       // it doesn't hurt to call allocateGpuDevice so just always do it.
@@ -385,20 +390,30 @@ class XGBoostClassificationModel private[ml](
       if (gpuId == 0) {
         gpuId = -1;
       }
-      val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
-      val dm = new DMatrix(gdfColsHandles(0), gpuId, missing)
 
-      Rabit.init(rabitEnv.asJava)
-      try {
-        // since native model will not save predictor context, force to gpu predictor
-        bBooster.value.setParam("predictor", "gpu_predictor")
-        val Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr) =
-          producePredictionItrs(bBooster, dm)
-        produceResultIterator(GpuDataset.columnBatchToRows(columnBatch),
-          rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
-      } finally {
-        Rabit.shutdown()
-        dm.delete()
+      val ((dm, columnBatchToRow), time) = GpuDataset.time("Transform: build dmatrix and row") {
+        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter)
+      }
+      logger.debug("Benchmark [Transform: Build Dmatrix and Row] " + time)
+
+      if (dm == null) {
+        logger.info("No data for DMatrix")
+        Iterator.empty
+      } else {
+        val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+        Rabit.init(rabitEnv.asJava)
+        try {
+          // since native model will not save predictor context, force to gpu predictor
+          bBooster.value.setParam("predictor", "gpu_predictor")
+          val Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr) =
+            producePredictionItrs(bBooster, dm)
+
+          produceResultIterator(columnBatchToRow.toIterator,
+            rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
+        } finally {
+          Rabit.shutdown()
+          dm.delete()
+        }
       }
     })
 
