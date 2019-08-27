@@ -200,7 +200,7 @@ class CSVPartitionReader(
         None
       } else {
         val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
-        dataSchema.foreach(f => csvSchemaBuilder.column(
+        readDataSchema.foreach(f => csvSchemaBuilder.column(
           GpuColumnBatch.getRapidsType(f.dataType), f.name))
         val newReadDataSchema: StructType = if (readDataSchema.isEmpty) {
           val smallestField = dataSchema.min(
