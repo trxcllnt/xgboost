@@ -129,7 +129,10 @@ class GpuDataReader(sparkSession: SparkSession) {
   protected def createDataset(relation: HadoopFsRelation, sourceType: String,
       sourceOptions: Map[String, String]): GpuDataset = {
     val asFloats = sourceOptions.getOrElse("asFloats", "true").toBoolean
-    new GpuDataset(relation, sourceType, sourceOptions - "asFloats", asFloats)
+    val maxRowsPerChunk: Integer = sourceOptions.getOrElse(
+      "maxRowsPerChunk", Integer.MAX_VALUE.toString).toInt
+    new GpuDataset(relation, sourceType, sourceOptions - "asFloats" - "maxRowsPerChunk",
+      asFloats, maxRowsPerChunk)
   }
 
   /**

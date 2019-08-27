@@ -28,6 +28,12 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
   override def afterEach(): Unit = {
     super.afterEach()
     GpuDatasetData.classifierCleanUp()
+    // Booster holds a pointer to native gpu memory. if Booster is not be disposed.
+    // then Gpu memory will leak. From upstream. Booster's finalize (dispose) depends
+    // on JVM GC. GC is not triggered freqently, which means gpu memory already leaks.
+    // The fix is force GC in the end of each unit test.
+    System.gc()
+    System.runFinalization()
   }
 
   test("test XGBoost-Spark XGBoostClassifier setFeaturesCols") {

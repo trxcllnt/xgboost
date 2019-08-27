@@ -121,6 +121,15 @@ class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
   }
 
   /**
+    * Append CUDF to dmatrix
+    * @param cols native handles of GDF columns
+    */
+  @throws(classOf[XGBoostError])
+  def appendCUDF(cols: Array[Long]): Unit = {
+    jDMatrix.appendCUDF(cols)
+  }
+
+  /**
    * set CUDF info of dmatrix
    * @param field label or feature
    * @param cols native handles of GDF columns
@@ -128,6 +137,16 @@ class DMatrix private[scala](private[scala] val jDMatrix: JDMatrix) {
   @throws(classOf[XGBoostError])
   def setCUDFInfo(field: String, cols: Array[Long]): Unit = {
     jDMatrix.setCUDFInfo(field, cols)
+  }
+
+  /**
+    * set CUDF info of dmatrix
+    * @param field label or feature
+    * @param cols native handles of GDF columns
+    */
+  @throws(classOf[XGBoostError])
+  def appendCUDFInfo(field: String, cols: Array[Long]): Unit = {
+    jDMatrix.appendCUDFInfo(field, cols)
   }
 
   /**

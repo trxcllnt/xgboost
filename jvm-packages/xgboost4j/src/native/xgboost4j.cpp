@@ -250,7 +250,6 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
   return ret;
 }
 
-
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixCreateFromMat
@@ -270,6 +269,7 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
 }
 
 extern void XGBAPISetLastError(const char* msg);
+
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixCreateFromCUDF
@@ -302,6 +302,33 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixCreateFro
 
 /*
  * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
+ * Method:    XGDMatrixAppendCUDF
+ * Signature: (J[JIF)I
+ */
+JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixAppendCUDF
+  (JNIEnv *jenv, jclass jcls, jlong jhandle, jlongArray jcols, jint gpu_id, jfloat missing) {
+#ifdef XGBOOST_USE_CUDF
+
+  jsize num_cols = jenv->GetArrayLength(jcols);
+  jlong* cols = jenv->GetLongArrayElements(jcols, nullptr);
+  if (cols == nullptr) {
+    LOG(ERROR) << "XGDMatrixAppendCUDF: Null Columns!";
+    XGBAPISetLastError("Null columns");
+    return -1;
+  }
+
+  int ret = XGDMatrixAppendCUDF((gdf_column**)cols, (size_t)num_cols,
+      (DMatrixHandle)jhandle, gpu_id, missing);
+  return ret;
+#else
+    LOG(ERROR) << "XGDMatrixAppendCUDF: Expect CUDF but disabled!";
+    XGBAPISetLastError("CUDF is not enabled!");
+    return -1;
+#endif
+}
+
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
  * Method:    XGDMatrixSetCUDFInfo
  * Signature: (JLjava/lang/String;[JI)I
  */
@@ -327,6 +354,39 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixSetCUDFIn
   return ret;
 #else
   LOG(ERROR) << "XGDMatrixSetCUDFInfo: Expect CUDF but disabled!";
+  XGBAPISetLastError("CUDF is not enabled!");
+  return -1;
+#endif
+}
+
+/*
+ * Class:     ml_dmlc_xgboost4j_java_XGBoostJNI
+ * Method:    XGDMatrixAppendCUDFInfo
+ * Signature: (JLjava/lang/String;[JI)I
+ */
+JNIEXPORT jint JNICALL Java_ml_dmlc_xgboost4j_java_XGBoostJNI_XGDMatrixAppendCUDFInfo
+    (JNIEnv *jenv, jclass jcls, jlong jhandle, jstring jfield, jlongArray jcols, jint gpu_id) {
+
+#ifdef XGBOOST_USE_CUDF
+  jsize num_cols = jenv->GetArrayLength(jcols);
+  jlong* cols = jenv->GetLongArrayElements(jcols, nullptr);
+  const char* field = jenv->GetStringUTFChars(jfield, nullptr);
+  if (cols == nullptr || field == nullptr) {
+    std::string msg = "XGDMatrixAppendCUDFInfo: ";
+    LOG(ERROR) << msg.append(field == nullptr ? "Null field!" : "Null Columns!");
+    XGBAPISetLastError(msg.c_str());
+    return -1;
+  }
+  int ret = XGDMatrixAppendCUDFInfo((DMatrixHandle)jhandle, field, (gdf_column**)cols, (size_t)num_cols, gpu_id);
+  if (field != nullptr) {
+    jenv->ReleaseStringUTFChars(jfield, field);
+  }
+  if (cols != nullptr) {
+    jenv->ReleaseLongArrayElements(jcols, cols, 0);
+  }
+  return ret;
+#else
+  LOG(ERROR) << "XGDMatrixAppendCUDFInfo: Expect CUDF but disabled!";
   XGBAPISetLastError("CUDF is not enabled!");
   return -1;
 #endif

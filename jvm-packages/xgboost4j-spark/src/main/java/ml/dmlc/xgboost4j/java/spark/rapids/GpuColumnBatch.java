@@ -21,8 +21,21 @@ import java.util.List;
 
 import ai.rapids.cudf.ColumnVector;
 
+import ai.rapids.cudf.DType;
 import ai.rapids.cudf.Table;
+
+import org.apache.spark.sql.types.BooleanType;
+import org.apache.spark.sql.types.ByteType;
+import org.apache.spark.sql.types.DataType;
+import org.apache.spark.sql.types.DateType;
+import org.apache.spark.sql.types.DoubleType;
+import org.apache.spark.sql.types.FloatType;
+import org.apache.spark.sql.types.IntegerType;
+import org.apache.spark.sql.types.LongType;
+import org.apache.spark.sql.types.ShortType;
+import org.apache.spark.sql.types.StringType;
 import org.apache.spark.sql.types.StructType;
+import org.apache.spark.sql.types.TimestampType;
 
 public class GpuColumnBatch {
   private final Table table;
@@ -122,5 +135,38 @@ public class GpuColumnBatch {
     ColumnVector retCV = ColumnVector.fromBoxedFloats(onesData.toArray(new Float[]{}));
     retCV.ensureOnDevice();
     return new long[] {retCV.getNativeCudfColumnAddress()};
+  }
+
+  public static DType getRapidsType(DataType type) {
+    DType result = toRapidsOrNull(type);
+    if (result == null) {
+      throw new IllegalArgumentException(type + " is not supported for GPU processing yet.");
+    }
+    return result;
+  }
+
+  private static DType toRapidsOrNull(DataType type) {
+    if (type instanceof LongType) {
+      return DType.INT64;
+    } else if (type instanceof DoubleType) {
+      return DType.FLOAT64;
+    } else if (type instanceof ByteType) {
+      return DType.INT8;
+    } else if (type instanceof BooleanType) {
+      return DType.BOOL8;
+    } else if (type instanceof ShortType) {
+      return DType.INT16;
+    } else if (type instanceof IntegerType) {
+      return DType.INT32;
+    } else if (type instanceof FloatType) {
+      return DType.FLOAT32;
+    } else if (type instanceof DateType) {
+      return DType.DATE32;
+    } else if (type instanceof TimestampType) {
+      return DType.TIMESTAMP;
+    } else if (type instanceof StringType) {
+      return DType.STRING; // TODO what do we want to do about STRING_CATEGORY???
+    }
+    return null;
   }
 }

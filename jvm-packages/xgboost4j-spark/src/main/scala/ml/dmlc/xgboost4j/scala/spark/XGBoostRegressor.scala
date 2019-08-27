@@ -16,12 +16,14 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
+
 import scala.collection.{AbstractIterator, Iterator, mutable}
 import scala.collection.JavaConverters._
-import ml.dmlc.xgboost4j.java.{Rabit, XGBoost => JXGBoost, XGBoostSparkJNI}
+import ml.dmlc.xgboost4j.java.{Rabit, XGBoostSparkJNI}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import ml.dmlc.xgboost4j.scala.spark.params.{DefaultXGBoostParamsReader, _}
-import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
+import ml.dmlc.xgboost4j.scala.spark.rapids.{ColumnBatchToRow, GpuDataset}
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import org.apache.commons.logging.LogFactory
@@ -37,7 +39,6 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.json4s.DefaultFormats
-
 import org.apache.spark.broadcast.Broadcast
 
 private[spark] trait XGBoostRegressorParams extends GeneralParams with BoosterParams
@@ -311,8 +312,7 @@ class XGBoostRegressionModel private[ml] (
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
     val missing = getMissingValue
-    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
-      val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+    val resultRDD = dataset.mapColumnarBatchPerPartition((iter: Iterator[GpuColumnBatch]) => {
       // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
       // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
       // it doesn't hurt to call allocateGpuDevice so just always do it.
@@ -321,20 +321,29 @@ class XGBoostRegressionModel private[ml] (
       if (gpuId == 0) {
         gpuId = -1;
       }
-      val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
-      val dm = new DMatrix(gdfColsHandles(0), gpuId, missing)
 
-      Rabit.init(rabitEnv.asJava)
-      try {
-        // since native model will not save predictor context, force to gpu predictor
-        bBooster.value.setParam("predictor", "gpu_predictor")
-        val Array(rawPredictionItr, predLeafItr, predContribItr) =
-          producePredictionItrs(bBooster, dm)
-        produceResultIterator(GpuDataset.columnBatchToRows(columnBatch),
-          rawPredictionItr, predLeafItr, predContribItr)
-      } finally {
-        Rabit.shutdown()
-        dm.delete()
+      val ((dm, columnBatchToRow), time) = GpuDataset.time("Transform: build dmatrix and row") {
+        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter)
+      }
+      logger.debug("Benchmark [Transform: Build Dmatrix and Row] " + time)
+
+      if (dm == null) {
+        logger.info("No data for DMatrix")
+        Iterator.empty
+      } else {
+        val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+        Rabit.init(rabitEnv.asJava)
+        try {
+          // since native model will not save predictor context, force to gpu predictor
+          bBooster.value.setParam("predictor", "gpu_predictor")
+          val Array(rawPredictionItr, predLeafItr, predContribItr) =
+            producePredictionItrs(bBooster, dm)
+          produceResultIterator(columnBatchToRow.toIterator, rawPredictionItr,
+            predLeafItr, predContribItr)
+        } finally {
+          Rabit.shutdown()
+          dm.delete()
+        }
       }
     })
 
