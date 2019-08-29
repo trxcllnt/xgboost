@@ -47,7 +47,9 @@ pipeline {
             }
         }
         stage('Jenkins: Build & Test') {
+            agent { label 'docker-gpu' }
             steps {
+                unstash name: 'srcs'
                 script {
                     def dockerImage = docker.build(
                         'xgboost-dev-centos7-build',

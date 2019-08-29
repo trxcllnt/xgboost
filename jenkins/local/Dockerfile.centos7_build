@@ -87,5 +87,7 @@ ADD centos7_to_cuda10.0.sh /opt/tools/to_cuda10.0.sh
 
 # setup CI
 RUN adduser jenkins && \
+    adduser svcngcc && \
     su jenkins -c "conda init --all" && \
-    chmod -R 777 /home/jenkins /usr/local
+    su svcngcc -c "conda init --all" && \
+    chmod -R 777 /home/jenkins /home/svcngcc /usr/local
