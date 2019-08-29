@@ -9,25 +9,12 @@ import groovy.transform.Field
 
 /* Unrestricted tasks: tasks that do NOT generate artifacts */
 
-// Command to run command inside a docker container
-def dockerRun = 'tests/ci_build/ci_build_spark.sh'
 // Utility functions
 @Field
 def utils
 
-def buildMatrix = [
-    [ "enabled": true, "buildCmd": "build_jvm_deploy.sh", "cudaVersion": "10.0", "dockerTarget": "sparkgpu"],
-    [ "enabled": true, "buildCmd": "build_jvm_deploy.sh", "cudaVersion": "9.2", "dockerTarget": "sparkgpu"],
-    [ "enabled": true, "buildCmd": "build_jvm_deploy_centos7.sh", "cudaVersion": "10.0", "dockerTarget": "gpu_centos7"],
-    [ "enabled": true, "buildCmd": "build_jvm_deploy_centos7.sh", "cudaVersion": "9.2", "dockerTarget": "gpu_centos7"],
-]
-
 pipeline {
     agent any
-
-//    environment {
-//        DOCKER_CACHE_REPO = 'apt-sh04.nvidia.com:5005'
-//    }
 
     // Setup common job properties
     options {
@@ -40,7 +27,6 @@ pipeline {
 
     parameters {
         string(name: 'REF', defaultValue: 'nv-cudf-interop', description: 'Commit to build')
-        booleanParam(name: 'BUILD_CENTOS7', defaultValue: false, description: 'Whether to enable build for Centos7')
     }
 
     triggers {
@@ -63,14 +49,12 @@ pipeline {
         stage('Jenkins: Build & Test') {
             steps {
                 script {
-                    echo 'run buildFactory'
-                    buildPlatformCmake(buildMatrix[0], "docker-gpu")
-                    buildPlatformCmake(buildMatrix[1], "docker-gpu")
-                    //enable xgboot build on centos7
-                    if ( params.BUILD_CENTOS7 ) {
-                        buildPlatformCmake(buildMatrix[2], "docker-gpu")
-                        buildPlatformCmake(buildMatrix[3], "docker-gpu")
-                    } 
+                    def dockerImage = docker.build(
+                        'xgboost-dev-centos7-build',
+                        '-f jenkins/local/Dockerfile.centos7_build jenkins/local')
+                    dockerImage.inside('--runtime=nvidia -v /etc/passwd:/etc/passwd -v /etc/group:/etc/group') {
+                        sh 'scl enable devtoolset-7 jenkins/local/build-jvm-nightly.sh'
+                    }
                 }
             }
         }
@@ -89,39 +73,3 @@ pipeline {
         }
     }
 }
-
-/**
- * Build platform and test it via cmake.
- */
-def buildPlatformCmake(conf, nodeReq) {
-    // Destination dir for artifacts
-    echo 'Begin buildPlatformCmake'
-    def dockerArgs = ""
-    def buildCommand = "tests/ci_build/" + conf["buildCmd"]
-    def dockerTarget = conf["dockerTarget"]
-    dockerArgs = "--build-arg CUDA_VER=" + conf["cudaVersion"]
-    buildCommand = buildCommand + " " + conf["cudaVersion"]
-    echo "build command: ${buildCommand}"
-    // Build node - this is returned result
-    retry(1) {
-        node(nodeReq) {
-            unstash name: 'srcs'
-            echo """
-            |===== XGBoost Spark  build =====
-            |  dockerTarget: ${dockerTarget}
-            |=========================
-            """.stripMargin('|')
-            // Invoke command inside docker
-            if ("${dockerTarget}" == "gpu_centos7") {
-                sh """
-                ${dockerRun} ${dockerTarget} ${dockerArgs} scl enable devtoolset-7 '${buildCommand}'
-                """
-            } else {
-                sh """
-                ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i ${buildCommand}
-                """
-            }
-        }
-    }
-}
-
