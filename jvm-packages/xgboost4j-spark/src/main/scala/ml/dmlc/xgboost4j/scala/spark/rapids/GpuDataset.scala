@@ -603,7 +603,7 @@ object GpuDataset {
     def toFilePartition(index: Int): FilePartition = createFilePartition(index, files)
   }
 
-  def getColumnRowNumberMapper: Iterator[GpuColumnBatch] => Iterator[Long] = {
+  def getColumnRowNumberMapper: Iterator[GpuColumnBatch] => Iterator[(Int, Long)] = {
     iter: Iterator[GpuColumnBatch] => {
       var totalRows: Long = 0
       var columns: Int = 0
@@ -616,7 +616,11 @@ object GpuDataset {
           columns = batch.getNumColumns
         }
       }
-      Iterator(columns, totalRows)
+      if (isFirstBunch) {
+        Iterator.empty
+      } else {
+        Iterator((columns, totalRows))
+      }
     }
   }
 

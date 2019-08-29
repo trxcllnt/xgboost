@@ -102,9 +102,9 @@ class ParquetScanSuite extends FunSuite with PerTest with SparkQueryCompareTestS
     val dataset = reader.parquet(TRAIN_PARQUET_PATH)
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(149) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)_1 }
+    assertResult(149) { counts(0)_2 }
   }
 
   test("Parquet subset parsing") {
@@ -114,9 +114,9 @@ class ParquetScanSuite extends FunSuite with PerTest with SparkQueryCompareTestS
     val dataset = reader.schema(specSchema).parquet(TRAIN_PARQUET_PATH)
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(3) { counts(0) }
-    assertResult(149) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(3) { counts(0)_1 }
+    assertResult(149) { counts(0)_2 }
   }
 
   test("Parquet repartition when numPartitions is greater than numPartitionedFile") {
@@ -132,9 +132,9 @@ class ParquetScanSuite extends FunSuite with PerTest with SparkQueryCompareTestS
 
     assertResult(2) {rdd.getNumPartitions}
     val counts = rdd.collect
-    assertResult(4) {counts.length}
-    assertResult(5) {counts(0) }
-    assertResult(149) { counts(1) }
+    assertResult(1) {counts.length}
+    assertResult(5) {counts(0)_1 }
+    assertResult(149) { counts(0)_2 }
   }
 
   test("auto split when loading parquet file") {
@@ -147,8 +147,8 @@ class ParquetScanSuite extends FunSuite with PerTest with SparkQueryCompareTestS
 
     assertResult(2) { rdd.getNumPartitions }
     val counts = rdd.collect
-    assertResult(4) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(149) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0) _1}
+    assertResult(149) { counts(0)_2 }
   }
 }

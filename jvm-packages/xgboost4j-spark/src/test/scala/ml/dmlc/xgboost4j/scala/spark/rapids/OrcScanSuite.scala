@@ -111,7 +111,7 @@ class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
 
     assertResult(4) {rdd.getNumPartitions}
     val counts = rdd.collect
-    assertResult(8) { counts.length }
+    assertResult(2) { counts.length }
     orcProperSplitVerification(counts)
   }
 
@@ -128,24 +128,18 @@ class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
     orcUnproperSplitVerification(counts)
   }
 
-  private def orcProperSplitVerification(counts: Array[(Long)]): Unit = {
-    assertResult(8) {counts.length}
-    assertResult(6) { counts(0) }
-    assertResult(1024) { counts(1) }
-    assertResult(6){ counts(2) }
-    assertResult(976) { counts(3) }
-    assertResult(0) { counts(4) }
-    assertResult(0) { counts(5) }
-    assertResult(0) { counts(6) }
-    assertResult(0) { counts(7) }
+  private def orcProperSplitVerification(counts: Array[(Int, Long)]): Unit = {
+    assertResult(2) {counts.length}
+    assertResult(6) { counts(0)_1 }
+    assertResult(1024) { counts(0)_2 }
+    assertResult(6){ counts(1)_1 }
+    assertResult(976) { counts(1)_2 }
   }
 
-  private def orcUnproperSplitVerification(counts: Array[(Long)]): Unit = {
-    assertResult(4) { counts.length }
-    assertResult(6) {counts(0)}
-    assertResult(2000) {counts(1)}
-    assertResult(0) {counts(2)}
-    assertResult(0) {counts(3)}
+  private def orcUnproperSplitVerification(counts: Array[(Int, Long)]): Unit = {
+    assertResult(1) { counts.length }
+    assertResult(6) {counts(0)_1}
+    assertResult(2000) {counts(0)_2}
   }
 
   test("Test Orc rows chunk") {
