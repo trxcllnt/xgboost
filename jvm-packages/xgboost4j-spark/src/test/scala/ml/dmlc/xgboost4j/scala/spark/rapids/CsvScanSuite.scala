@@ -48,6 +48,36 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
     compareResults(false, 0.000000001, fromCpu, fromGpu)
   }
 
+  test("CSV rows chunk") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
+    val reader = new GpuDataReader(ss).schema(csvSchema)
+
+    var dataset = reader.option("maxRowsPerChunk", 100).csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+      .repartition(1)
+    var counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(3) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 1).csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(215) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 10).csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(22) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 1000).csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(2) { counts(0) }
+  }
+
   test("CSV rows columns number") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)

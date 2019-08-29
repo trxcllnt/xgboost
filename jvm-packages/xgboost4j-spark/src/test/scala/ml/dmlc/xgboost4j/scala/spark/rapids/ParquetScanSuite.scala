@@ -53,6 +53,49 @@ class ParquetScanSuite extends FunSuite with PerTest with SparkQueryCompareTestS
     compareResults(false, 0.000000001, fromCpu, fromGpu)
   }
 
+  test("Test Parquet rows chunk") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val fileName = getTestDataPath("/file-splits.parquet")
+
+    val reader = new GpuDataReader(ss)
+
+    var dataset = reader.option("maxRowsPerChunk", 20).parquet(fileName, fileName)
+      .repartition(1)
+    var counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(20) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 110).parquet(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(20) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 210).parquet(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(10) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 310).parquet(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(8) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 500).parquet(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(4) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 1000).parquet(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(2) { counts(0) }
+  }
+
   test("Parquet parsing") {
     assume(Cuda.isEnvCompatibleForTesting)
     val reader = new GpuDataReader(ss)
