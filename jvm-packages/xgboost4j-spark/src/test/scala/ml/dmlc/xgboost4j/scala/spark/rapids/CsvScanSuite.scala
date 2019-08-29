@@ -88,9 +88,9 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       .repartition(1)
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(215) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)_1 }
+    assertResult(215) { counts(0)_2 }
   }
 
   test("CSV parsing with compression") {
@@ -103,9 +103,9 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       .csv(getTestDataPath("/rank.train.csv.gz"))
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(149) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)_1 }
+    assertResult(149) { counts(0)_2 }
   }
 
   test("Unknown CSV parsing option") {
@@ -126,9 +126,9 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       .schema(csvSchema).option("header", true).csv(path)
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(10) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)_1 }
+    assertResult(10) { counts(0)_2 }
   }
 
   test("CSV parsing with custom delimiter") {
@@ -142,9 +142,9 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       .option("sep", "|").csv(path)
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(10) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)_1 }
+    assertResult(10) { counts(0)_2 }
   }
 
   test("CSV parsing with comments") {
@@ -158,9 +158,9 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       .option("comment", "#").csv(path)
     val rdd = dataset.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper)
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(5) { counts(0) }
-    assertResult(10) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(5) { counts(0)_1 }
+    assertResult(10) { counts(0)_2 }
   }
 
   test("CSV multifile partition") {
@@ -178,9 +178,9 @@ class CsvScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
       rdd.partitions.length
     }
     val counts = rdd.collect
-    assertResult(2) { counts.length }
-    assertResult(4) { counts(0) }
-    assertResult(149) { counts(1) }
+    assertResult(1) { counts.length }
+    assertResult(4) { counts(0)_1 }
+    assertResult(149) { counts(0)_2 }
   }
 
   test(testName = "auto split csv file when loading") {

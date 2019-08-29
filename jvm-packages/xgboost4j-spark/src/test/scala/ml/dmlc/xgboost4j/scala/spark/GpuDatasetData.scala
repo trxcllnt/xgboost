@@ -93,7 +93,7 @@ object GpuDatasetData {
     val test = new GpuDataReader(spark).schema(schema).csv(getTestDataPath(path))
     val counts = test.mapColumnarBatchPerPartition(GpuDataset.getColumnRowNumberMapper).collect()
 
-    (test, counts(1))
+    (test, counts(0)_2)
   }
 
   private def getColumns(file: String, schema: StructType, label: String):
