@@ -24,6 +24,13 @@ import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.scalatest.FunSuite
 
 trait SparkQueryCompareTestSuite extends FunSuite {
+  def getChunkCount(dataset: GpuDataset): Array[Int] = {
+    val rdd = dataset.mapColumnarBatchPerPartition((iter: Iterator[GpuColumnBatch]) => {
+      Iterator.single(iter.size)
+    })
+    rdd.collect
+  }
+
    def getTestDataPath(resource: String): String = {
     require(resource.startsWith("/"), "resource must start with /")
     getClass.getResource(resource).getPath

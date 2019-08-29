@@ -52,7 +52,6 @@ class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
     compareResults(false, 0.000000001, fromCpu, fromGpu)
   }
 
-
   test("ORC parsing with raw types") {
     assume(Cuda.isEnvCompatibleForTesting)
     val data = new GpuDataReader(ss)
@@ -147,5 +146,49 @@ class OrcScanSuite extends FunSuite with PerTest with SparkQueryCompareTestSuite
     assertResult(2000) {counts(1)}
     assertResult(0) {counts(2)}
     assertResult(0) {counts(3)}
+  }
+
+  test("Test Orc rows chunk") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val fileName = getTestDataPath("/file-splits.orc")
+
+    val reader = new GpuDataReader(ss)
+
+    var dataset = reader.option("maxRowsPerChunk", 20).orc(fileName, fileName)
+      .repartition(1)
+    var counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(10) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 1026).orc(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(10) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 2049).orc(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(6) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 3097).orc(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(4) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 4096).orc(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(4) { counts(0) }
+
+    dataset = reader.option("maxRowsPerChunk", 10000).orc(fileName, fileName)
+      .repartition(1)
+    counts = getChunkCount(dataset)
+    assertResult(1) { counts.length }
+    assertResult(2) { counts(0) }
+
   }
 }
