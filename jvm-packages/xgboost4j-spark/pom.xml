@@ -36,8 +36,6 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                            <shadedClassifierName>${cudf.classifier}</shadedClassifierName>
                             <artifactSet>
                                 <includes>
                                     <include>org.apache.orc:orc-core:nohive</include>
@@ -62,7 +60,6 @@
             <groupId>ai.rapids</groupId>
             <artifactId>xgboost4j_${scala.binary.version}</artifactId>
             <version>1.0.0-SNAPSHOT</version>
-            <classifier>${cudf.classifier}</classifier>
         </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
