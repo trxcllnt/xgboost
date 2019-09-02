@@ -92,7 +92,7 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
     // Train with eval set(s)
     val evalDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
     // 1) Set via xgboost ML API
-    classifier.setGpuEvalSets(Map("test" -> evalDataAsGpuDS))
+    classifier.setEvalSets(Map("test" -> evalDataAsGpuDS))
     val model2 = classifier.fit(trainDataAsGpuDS)
     val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
