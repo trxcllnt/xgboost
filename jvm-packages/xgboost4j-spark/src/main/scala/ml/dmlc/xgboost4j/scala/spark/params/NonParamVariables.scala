@@ -20,41 +20,47 @@ import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
 import org.apache.spark.sql.DataFrame
 
 trait NonParamVariables {
-  protected var evalSetsMap: Map[String, DataFrame] = Map.empty
+  protected var evalSetsMap: Map[String, AnyRef] = Map.empty
+  private val KEY_EVAL_SETS: String = "eval_sets"
 
-  def setEvalSets(evalSets: Map[String, DataFrame]): this.type = {
+  def setEvalSets(evalSets: Map[String, AnyRef]): this.type = {
     evalSetsMap = evalSets
     this
   }
 
   def getEvalSets(params: Map[String, Any]): Map[String, DataFrame] = {
-    if (params.contains("eval_sets")) {
-      params("eval_sets").asInstanceOf[Map[String, DataFrame]]
+    val evalDFs = if (params.contains(KEY_EVAL_SETS)) {
+      params(KEY_EVAL_SETS).asInstanceOf[Map[String, DataFrame]]
     } else {
-      evalSetsMap
+      evalSetsMap.asInstanceOf[Map[String, DataFrame]]
     }
-  }
-
-  protected var gpuEvalSetsMap: Map[String, GpuDataset] = Map.empty
-
-  def setGpuEvalSets(evalSets: Map[String, GpuDataset]): this.type = {
-    gpuEvalSetsMap = evalSets
-    this
+    // Do type check for value entry here because the `asInstanceOf` just checks the first
+    // layer: Map, even specifying the types for both key and value.
+    require(evalDFs.values.forall(_.isInstanceOf[DataFrame]),
+      "Wrong type for value! Evaluation sets should be Map(name: String -> DataFrame) for CPU.")
+    evalDFs
   }
 
   def getGpuEvalSets(params: Map[String, Any]): Map[String, GpuDataset] = {
-    // To minimize the change in apps, we share the same "eval_sets" with cpu.
-    // Then NO code update is needed for the eval parameter part, just get the eval
-    // sets as GpuDatasets.
-    if (params.contains("eval_sets")) {
-      val evals = params("eval_sets").asInstanceOf[Map[String, GpuDataset]]
-      // Do value type check here because the above just checks the first layer: Map,
-      // even specifying the types for both key and value.
-      require(evals.values.forall(_.isInstanceOf[GpuDataset]),
-        "Wrong type for value! Evaluation sets should be Map(name: String -> GpuDataset) for GPU.")
-      evals.asInstanceOf[Map[String, GpuDataset]]
+    // To minimize the change in apps, we use the same "eval_sets" with cpu.
+    // Then NO code change is needed for the eval parameter part, just get the eval
+    // sets as GpuDataset.
+    val evalGDSs = if (params.contains(KEY_EVAL_SETS)) {
+      params(KEY_EVAL_SETS).asInstanceOf[Map[String, GpuDataset]]
     } else {
-      gpuEvalSetsMap
+      evalSetsMap.asInstanceOf[Map[String, GpuDataset]]
     }
+    // Do type check for value entry here because the `asInstanceOf` just checks the first
+    // layer: Map, even specifying the types for both key and value.
+    require(evalGDSs.values.forall(_.isInstanceOf[GpuDataset]),
+      "Wrong type for value! Evaluation sets should be Map(name: String -> GpuDataset) for GPU.")
+    evalGDSs
+  }
+
+  // Use setEvalSets instead
+  @Deprecated
+  def setGpuEvalSets(evalSets: Map[String, GpuDataset]): this.type = {
+    evalSetsMap = evalSets
+    this
   }
 }
