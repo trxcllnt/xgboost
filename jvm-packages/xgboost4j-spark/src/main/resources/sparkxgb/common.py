@@ -77,10 +77,9 @@ class XGboostEstimator(JavaEstimator, XGBoostReadable, JavaMLWritable, ParamGett
     def setEvalSets(self, eval_sets):
         if eval_sets:
             is_data_frame = isinstance(list(eval_sets.values())[0], DataFrame)
-            setter = self._java_obj.setEvalSets if is_data_frame else self._java_obj.setGpuEvalSets
             jvm_eval_sets = _jvm().PythonUtils.toScalaMap(
                 { k: v._jdf if is_data_frame else v._java_obj for k, v in eval_sets.items() })
-            setter(jvm_eval_sets)
+            self._java_obj.setEvalSets(jvm_eval_sets)
         return self
 
     def fit(self, dataset):
