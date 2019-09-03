@@ -85,9 +85,4 @@ ENV RMM_ROOT=/opt/conda/envs/${CUDA_B}
 ADD centos7_to_cuda9.2.sh /opt/tools/to_cuda9.2.sh
 ADD centos7_to_cuda10.0.sh /opt/tools/to_cuda10.0.sh
 
-# setup CI
-RUN adduser jenkins && \
-    adduser svcngcc && \
-    su jenkins -c "conda init --all" && \
-    su svcngcc -c "conda init --all" && \
-    chmod -R 777 /home/jenkins /home/svcngcc /usr/local
+RUN chmod 777 /usr/local

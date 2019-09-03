@@ -85,7 +85,6 @@ if __name__ == "__main__":
 
     print("building Java wrapper on " + cuda)
     with cd(".."):
-        shutil.rmtree("build", True)
         maybe_makedirs("build")
         with cd("build"):
             if sys.platform == "win32":
