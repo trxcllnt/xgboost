@@ -7,7 +7,6 @@
 properties([parameters([
     choice(name: 'DEPLOY_SERVER', choices: ['Local', 'Gpuwa', 'Sonatype'], description: 'The server where to deploy.'),
     booleanParam(name: 'SIGN_JAR', defaultValue: true, description: 'Whether to sign files before deployment'),
-    booleanParam(name: 'BUILD_CENTOS7', defaultValue: true, description: 'Whether to enable build for Centos7')
 ])])
 
 def SERVERS_MAP = [
@@ -31,41 +30,15 @@ node('docker-deploy') {
     ]) {
         sh "rm -rf $OUT"
 
-        stage ('Build with CUDA9.2 on Ubuntu16') {
-            def dockerImage = docker.build("xgboost-dev-cuda9.2-ubuntu16",
-                    "--build-arg CUDA_VER=9.2 -f ${LOCAL_ROOT}/Dockerfile.ubuntu16 ${LOCAL_ROOT}")
-            dockerImage.inside ('--runtime=nvidia') {
-                sh "bash $BUILD_SCRIPT"
+        stage ('Build XGBoost on Centos7') {
+            def dockerImage = docker.build("xgboost-dev-build-centos7",
+                    "-f ${LOCAL_ROOT}/Dockerfile.centos7_build ${LOCAL_ROOT}")
+            dockerImage.inside ('--runtime=nvidia -u root') {
+                sh "scl enable devtoolset-7 '$BUILD_SCRIPT ${params.SIGN_JAR}'"
             }
         }
 
-        stage ('Build with CUDA10.0 on Ubuntu16') {
-            def dockerImage = docker.build("xgboost-dev-cuda10.0-ubuntu16",
-                    "--build-arg CUDA_VER=10.0 -f ${LOCAL_ROOT}/Dockerfile.ubuntu16 ${LOCAL_ROOT}")
-            dockerImage.inside ('--runtime=nvidia') {
-                sh "bash $BUILD_SCRIPT cuda10"
-            }
-        }
-
-        if (params.BUILD_CENTOS7) {
-        stage ('Build with CUDA9.2 on Centos7') {
-            def dockerImage = docker.build("xgboost-dev-cuda9.2-centos7",
-                    "--build-arg CUDA_VER=9.2 -f ${LOCAL_ROOT}/Dockerfile.centos7 ${LOCAL_ROOT}")
-            dockerImage.inside ('--runtime=nvidia') {
-                sh "scl enable devtoolset-7 '$BUILD_SCRIPT cuda9-centos7'"
-            }
-        }
-
-        stage ('Build with CUDA10.0 on Centos7') {
-            def dockerImage = docker.build("xgboost-dev-cuda10.0-centos7",
-                    "--build-arg CUDA_VER=10.0 -f ${LOCAL_ROOT}/Dockerfile.centos7 ${LOCAL_ROOT}")
-            dockerImage.inside ('--runtime=nvidia') {
-                sh "scl enable devtoolset-7 '$BUILD_SCRIPT cuda10-centos7'"
-            }
-        }
-        } // end of if build centos7
-
-        stage ("Deploy to ${params.DEPLOY_SERVER}") {
+        stage ("Deploy XGBoost to ${params.DEPLOY_SERVER}") {
             def secInfo = params.DEPLOY_SERVER == 'Sonatype' ?
                 ['rapids-gpg-private-key', 'rapids-gpg-passphrase', 'sonatype-username-password', 'true'] :
                 ['local-gpg-private-key', 'local-gpg-passphrase', 'local-username-password', "${params.SIGN_JAR}"]
@@ -74,9 +47,9 @@ node('docker-deploy') {
                 "SERVER_URL=${SERVERS_MAP[params.DEPLOY_SERVER]}",
                 'SERVER_ID=ossrh'
             ]) {
-                def dockerImage = docker.build("xgboost-dev-cuda10.0-ubuntu16",
-                        "--build-arg CUDA_VER=10.0 -f ${LOCAL_ROOT}/Dockerfile.ubuntu16 ${LOCAL_ROOT}")
-                dockerImage.inside ('--runtime=nvidia -u 0') {
+                def dockerImage = docker.build("xgboost-dev-build-centos7",
+                        "-f ${LOCAL_ROOT}/Dockerfile.centos7_build ${LOCAL_ROOT}")
+                dockerImage.inside ('--runtime=nvidia -u root') {
                     withCredentials([
                         file(credentialsId: "${secInfo[0]}", variable: 'GPG_FILE'),
                         string(credentialsId: "${secInfo[1]}", variable: 'GPG_PASSPHRASE'),

@@ -9,6 +9,7 @@
 ###
 set -e
 gcc --version
+echo "Sign Jar?: $1"
 
 # Should be called under 'jvm-packages'
 stashJars(){
@@ -17,21 +18,27 @@ stashJars(){
     cp -ft $MODULE_OUT $1/target/*.jar
 }
 
-CLASSIFIER=$1
-BUILD_ARG="-DskipTests \
-    -Dcudf.classifier=$CLASSIFIER \
-    -Dmaven.repo.local=$WORKSPACE/.m2"
+###### Preparation before build ######
+SIGN_FILE=$1
+BUILD_ARG="-DskipTests -Dmaven.repo.local=$WORKSPACE/.m2"
 
-if [ "$CLASSIFIER"x == x ]; then
-    # Only build javadoc and sources when cuda9.2
+if [ "$SIGN_FILE" == true ]; then
+    # Build javadoc and sources only when SIGN_JAR
     BUILD_ARG="$BUILD_ARG -Prelease-to-sonatype"
 fi
 
+###### Build jar and its libraries ######
 rm -rf build
 cd jvm-packages
+## 1) Build libxgboost4j.so for CUDA9.2
+. /opt/tools/to_cuda9.2.sh
+./create_jni.py cuda9.2
+## 2) Build libxgboost4j.so for CUDA10.0 and the jar file
+rm -rf ../build
+. /opt/tools/to_cuda10.0.sh
 mvn clean package $BUILD_ARG
 
-# Stash jar files for modules
+###### Stash jar files for modules ######
 stashJars xgboost4j
 stashJars xgboost4j-spark
 
