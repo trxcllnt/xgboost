@@ -974,16 +974,9 @@ private object Watches {
           }
         })
       }
-
     }
-
-    if (dm == null) {
-      throw new RuntimeException("Can't build DMatrix from CUDF")
-    }
-
     logger.debug("Num class: " + max)
-
-    if (isLtr) {
+    if (dm != null && isLtr) {
       dm.setGroup(groupInfo)
     }
     (dm, max)
@@ -996,7 +989,11 @@ private object Watches {
       buildDMatrixIncrementally(gpuId, missing, indices, iter, inferNumClass)
     }
     logger.debug("Benchmark[Train: Build DMatrix incrementally] " + time)
-    new Watches(Array(dm), Array("train"), cachedDirName, inferNumClass, numClass)
+    if (dm == null) {
+      new Watches(Array.empty, Array.empty, cachedDirName, inferNumClass, numClass)
+    } else {
+      new Watches(Array(dm), Array("train"), cachedDirName, inferNumClass, numClass)
+    }
   }
 
   def buildWatchesWithEval(cachedDirName: Option[String], gpuId: Int, missing: Float,
@@ -1017,7 +1014,8 @@ private object Watches {
         }
         dm
       })
-    }.toArray
+    }.filter(_._2 != null).toArray
+
     new Watches(dms.map(_._2), dms.map(_._1), cachedDirName, inferNumClass, numClass)
   }
 // ========= GPU Pipeline End =============
