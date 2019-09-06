@@ -107,20 +107,19 @@ There is a Python library for XGBoost4J-Spark under `xgboost4j-spark/src/main/re
 
 ## Development
 
-You can build/package xgboost4j locally with the following steps:
+You can build/package xgboost4j and xgboost4j-spark locally with the following steps:
 
-**Linux:**
-1. Ensure [Docker for Linux](https://docs.docker.com/install/) is installed.
-2. Clone this repo: `git clone --recursive https://github.com/dmlc/xgboost.git`
-3. Run the following command:
-  - With Tests: `./xgboost/jvm-packages/dev/build-linux.sh`
-  - Skip Tests: `./xgboost/jvm-packages/dev/build-linux.sh --skip-tests` 
-
-**Windows:**
-1. Ensure [Docker for Windows](https://docs.docker.com/docker-for-windows/install/) is installed.
-2. Clone this repo: `git clone --recursive https://github.com/dmlc/xgboost.git`
-3. Run the following command:
-  - With Tests: `.\xgboost\jvm-packages\dev\build-linux.cmd`
-  - Skip Tests: `.\xgboost\jvm-packages\dev\build-linux.cmd --skip-tests`
+1. Ensure [Docker](https://docs.docker.com/install/) is installed.
+2. Build a docker image with [Dockerfile.centos7_build](../jenkins/local/Dockerfile.centos7_build), create a docker container based on that image, then enter that docker container.
+3. Follow below steps within the docker container:
+  - Install git and clone the code
+  - Enter the jvm-packages folder: `cd xgboost/jvm-packages`
+  - Enable devtoolset-7: `scl enable devtoolset-7 bash`
+  - Activate cuda 9.2: `. /opt/tools/to_cuda9.2.sh`
+  - Clean cache for native build: `rm -rf ../build`
+  - Compile native code with cuda 9.2: `./create_jni.py cuda9.2`
+  - Activate cuda 10.0: `. /opt/tools/to_cuda10.0.sh`
+  - Clean cache for native build: `rm -rf ../build`
+  - Compile native code with cuda 10.0 and build .jar packages: `mvn clean package`
 
 *Note: this will create jars for deployment on Linux machines.*
