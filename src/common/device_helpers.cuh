@@ -278,7 +278,7 @@ public:
       LOG(CONSOLE) << "======== Device " << kv.first << " Memory Allocations: "
         << " ========";
       LOG(CONSOLE) << "Peak memory usage: "
-        << kv.second.peak_allocated_bytes / 1000000 << "mb";
+        << kv.second.peak_allocated_bytes / 1048576 << "mb";
       LOG(CONSOLE) << "Number of allocations: " << kv.second.num_allocations;
     }
   }

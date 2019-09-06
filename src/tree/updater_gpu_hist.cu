@@ -160,9 +160,23 @@ enum class CompressedDataLayout {
   kCSR  // Every row is sized based on the actual number of items in that row
 };
 
-// Base type of all matrices containing the histograms for all the features that are needed
-// for binning. It also abstracts some of the feature quantile properties
-struct MatrixBase {
+/** \brief Struct for accessing and manipulating an ellpack/CSR matrix on the
+ * device. This can be copied cheaply on kernels.
+ */
+struct ELLPackMatrix {
+  __forceinline__ __device__ size_t BinCount() const { return gidx_fvalue_map.size(); }
+  __forceinline__ __device__ size_t RowStride() const { return row_stride; }
+  __forceinline__ __device__ uint32_t GetFeatureBin(int fidx) const {
+    return feature_segments[fidx];
+  }
+  __forceinline__ __device__ bst_float GetMinFeatureValue(int fidx) const {
+    return min_fvalue[fidx];
+  }
+  __forceinline__ __device__ const bst_float *GetFeatureValue(int fbin) const {
+    return &gidx_fvalue_map[fbin];
+  }
+  __forceinline__ __device__ int NullGidxValue() const { return null_gidx_value; }
+
   common::Span<uint32_t> feature_segments;
   /*! \brief minimum value for each feature. */
   common::Span<bst_float> min_fvalue;
@@ -177,78 +191,6 @@ struct MatrixBase {
   common::CompressedIterator<uint32_t> gidx_buffer_iter;
   common::Span<common::CompressedByteT> gidx_buffer;
 
-  __device__  explicit MatrixBase(
-    common::Span<uint32_t> fsegs, common::Span<bst_float> min_fvals,
-    common::Span<bst_float> fval_map, common::CompressedBufferWriter buf_wr,
-    common::CompressedIterator<uint32_t> buf_itr, common::Span<common::CompressedByteT> buf,
-    int ngidx, size_t rstride)
-      : feature_segments(fsegs), min_fvalue(min_fvals), gidx_fvalue_map(fval_map),
-        null_gidx_value(ngidx), gidx_buffer_writer(buf_wr), gidx_buffer_iter(buf_itr),
-        gidx_buffer(buf), row_stride(rstride) {}
-  __device__  virtual ~MatrixBase() {}  // NOLINT
-
-  __forceinline__ __device__ virtual bst_float GetElement(size_t ridx, size_t fidx) const = 0;
-  __forceinline__ __device__ virtual int GetGidx(size_t ridx, size_t gidx_pos) const {
-    return gidx_buffer_iter[ridx * row_stride + gidx_pos % row_stride];
-  }
-  __forceinline__ __device__ virtual void Write(const CompressRowContext &com_ctx) {
-    gidx_buffer_writer.AtomicWriteSymbol(
-      gidx_buffer.data(), com_ctx.bin_,
-      (com_ctx.irow_ + com_ctx.base_row_) * row_stride + com_ctx.ifeature_);
-  }
-
-  __forceinline__ __device__ uint32_t GetFeatureBin(int fidx) const {
-    return feature_segments[fidx];
-  }
-  __forceinline__ __device__ bst_float GetMinFeatureValue(int fidx) const {
-    return min_fvalue[fidx];
-  }
-  __forceinline__ __device__ const bst_float *GetFeatureValue(int fbin) const {
-    return &gidx_fvalue_map[fbin];
-  }
-  __forceinline__ __device__ size_t BinCount() const { return gidx_fvalue_map.size(); }
-  __forceinline__ __device__ size_t RowStride() const { return row_stride; }
-  __forceinline__ __device__ int NullGidxValue() const { return null_gidx_value; }
-};
-
-// A dense matrix representation, where every row contains every feature
-struct DenseMatrix : MatrixBase {
-  __forceinline__ __device__ bst_float GetElement(size_t ridx, size_t fidx) const override {
-    auto row_begin = row_stride * ridx;
-    auto gidx = gidx_buffer_iter[row_begin + fidx];
-    return gidx_fvalue_map[gidx];
-  }
-
-  __device__  explicit DenseMatrix(
-    common::Span<uint32_t> fsegs, common::Span<bst_float> min_fvals,
-    common::Span<bst_float> fval_map, common::CompressedBufferWriter buf_wr,
-    common::CompressedIterator<uint32_t> buf_itr, common::Span<common::CompressedByteT> buf,
-    int ngidx, size_t rstride)
-      : MatrixBase(fsegs, min_fvals, fval_map, buf_wr, buf_itr, buf, ngidx, rstride) {}
-};
-
-// A sparse matrix representation, where each row contains a constant number of features
-struct RowStrideMatrix : MatrixBase {
-  __forceinline__ __device__ bst_float GetElement(size_t ridx, size_t fidx) const override {
-    auto row_begin = row_stride * ridx;
-    auto row_end = row_begin + row_stride;
-    auto gidx = BinarySearchRow(row_begin, row_end, gidx_buffer_iter, feature_segments[fidx],
-                                feature_segments[fidx + 1]);
-    return (gidx == -1) ? nan("") : gidx_fvalue_map[gidx];
-  }
-
-  __device__  explicit RowStrideMatrix(
-    common::Span<uint32_t> fsegs, common::Span<bst_float> min_fvals,
-    common::Span<bst_float> fval_map, common::CompressedBufferWriter buf_wr,
-    common::CompressedIterator<uint32_t> buf_itr, common::Span<common::CompressedByteT> buf,
-    int ngidx, size_t rstride)
-      : MatrixBase(fsegs, min_fvals, fval_map, buf_wr, buf_itr, buf, ngidx, rstride) {}
-};
-
-// A sparse matrix representation in the CSR format, where it contains the exact number of items
-// present in the matrix. A sparse matrix can either be a RowStrideMatrix/CSRMatrix based on
-// which representation consumes less GPU memory
-struct CSRMatrix : MatrixBase {
   common::CompressedBufferWriter gidx_row_writer;
   common::CompressedIterator<uint32_t> gidx_row_iter;
   common::Span<common::CompressedByteT> gidx_row_buffer;
@@ -256,151 +198,105 @@ struct CSRMatrix : MatrixBase {
   size_t n_rows;  // Number of rows in this matrix
   size_t n_items;  // Number of items in this matrix
 
-  __forceinline__ __device__ bst_float GetElement(size_t ridx, size_t fidx) const override {
-    auto row_begin = gidx_row_iter[ridx];
-    auto row_end = gidx_row_iter[ridx + 1];
-    auto gidx = BinarySearchRow(row_begin, row_end, gidx_buffer_iter, feature_segments[fidx],
-                                feature_segments[fidx + 1]);
-    return (gidx == -1) ? nan("") : gidx_fvalue_map[gidx];
-  }
-
-  __forceinline__ __device__ int GetGidx(size_t ridx, size_t gidx_pos) const override {
-    uint32_t n_elems = gidx_row_iter[ridx + 1] - gidx_row_iter[ridx];
-    if (gidx_pos % row_stride < n_elems) {
-      return gidx_buffer_iter[gidx_row_iter[ridx] + gidx_pos % row_stride];
-    }
-    return null_gidx_value;
-  }
-
-  __forceinline__ __device__ void Write(const CompressRowContext &com_ctx) override {
-    if (com_ctx.bin_ != null_gidx_value) {
-      gidx_buffer_writer.AtomicWriteSymbol(gidx_buffer.data(), com_ctx.bin_,
-        com_ctx.row_offset_in_batch_ - com_ctx.base_item_offset_ +
-        com_ctx.total_items_processed_ + com_ctx.ifeature_);
-
-      // TODO(sriramch): There may be multiple writes to the row_buffer at irow + base_row
-      // It should be harmless, as the writes are atomic. Explore if there is a way to avoid it,
-      // as the atomic ops are needless after the first write
-      gidx_row_writer.AtomicWriteSymbol(gidx_row_buffer.data(),
-        com_ctx.row_offset_in_batch_ - com_ctx.base_item_offset_ + com_ctx.total_items_processed_,
-        (com_ctx.irow_ + com_ctx.base_row_));
-
-      // Write to the last element of the row index containing total number of items
-      if (com_ctx.irow_ + com_ctx.base_row_ + 1 == n_rows) {
-        gidx_row_writer.AtomicWriteSymbol(gidx_row_buffer.data(), n_items, n_rows);
-      }
-    }
-  }
-
-  __device__  explicit CSRMatrix(
-    common::Span<uint32_t> fsegs, common::Span<bst_float> min_fvals,
-    common::Span<bst_float> fval_map, common::CompressedBufferWriter buf_wr,
-    common::CompressedIterator<uint32_t> buf_itr, common::Span<common::CompressedByteT> buf,
-    int ngidx, size_t rstride, common::CompressedBufferWriter row_wr,
-    common::CompressedIterator<uint32_t> row_itr, common::Span<common::CompressedByteT> row_buf,
-    size_t nrows, size_t nitems)
-      : MatrixBase(fsegs, min_fvals, fval_map, buf_wr, buf_itr, buf, ngidx, rstride),
-        gidx_row_writer(row_wr), gidx_row_iter(row_itr), gidx_row_buffer(row_buf),
-        n_rows(nrows), n_items(nitems) {}
-};
-
-template <typename BaseType, typename DerivedType, typename... Args>
-__global__ void DeviceMatrixTypeCreatorKernel(BaseType **obj, Args... args) {
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    *obj = new DerivedType(args...);
-  }
-}
-
-template<typename std::enable_if<true,  int>::type = 0>
-__global__ void DeviceMatrixTypeDestroyerKernel(MatrixBase **ptr) {
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    delete *ptr;
-  }
-}
-
-/** \brief Struct for accessing and manipulating an ellpack matrix on the
- * device. The underlying matrix is created on the device and shared by multiple
- * instances. That has to be deleted before the instance itself is destructed
- * to avoid leaks.
- */
-struct ELLPackMatrix {
-  __forceinline__ __device__ size_t BinCount() const { return (*matrix)->BinCount(); }
-  __forceinline__ __device__ size_t RowStride() const { return (*matrix)->RowStride(); }
-  __forceinline__ __device__ uint32_t GetFeatureBin(int fidx) const {
-    return (*matrix)->GetFeatureBin(fidx);
-  }
-  __forceinline__ __device__ bst_float GetMinFeatureValue(int fidx) const {
-    return (*matrix)->GetMinFeatureValue(fidx);
-  }
-  __forceinline__ __device__ const bst_float *GetFeatureValue(int fbin) const {
-    return (*matrix)->GetFeatureValue(fbin);
-  }
-  __forceinline__ __device__ int NullGidxValue() const { return (*matrix)->NullGidxValue(); }
-
   bool is_dense;  // Is the matrix dense? Kept here for tests
   CompressedDataLayout data_layout;  // Kept here for tests
-  MatrixBase **matrix;  // Base matrix reference that can be handled polymorphically
 
   // Get a matrix element, uses binary search for look up
   // Return NaN if missing
   __forceinline__ __device__ bst_float GetElement(size_t ridx, size_t fidx) const {
-    return (*matrix)->GetElement(ridx, fidx);
+    if (data_layout == CompressedDataLayout::kCSR) {
+      auto row_begin = gidx_row_iter[ridx];
+      auto row_end = gidx_row_iter[ridx + 1];
+      auto gidx = (row_end > row_begin) ?
+        BinarySearchRow(row_begin, row_end, gidx_buffer_iter, feature_segments[fidx],
+                        feature_segments[fidx + 1])
+        : -1;
+      return (gidx == -1) ? nanf("") : gidx_fvalue_map[gidx];
+    } else if (is_dense) {
+      auto row_begin = row_stride * ridx;
+      auto gidx = gidx_buffer_iter[row_begin + fidx];
+      return gidx_fvalue_map[gidx];
+    } else if (data_layout == CompressedDataLayout::kRowStride) {
+      auto row_begin = row_stride * ridx;
+      auto row_end = row_begin + row_stride;
+      auto gidx = BinarySearchRow(row_begin, row_end, gidx_buffer_iter, feature_segments[fidx],
+                                  feature_segments[fidx + 1]);
+      return (gidx == -1) ? nanf("") : gidx_fvalue_map[gidx];
+    }
+    return null_gidx_value;
   }
 
   // Get the gidx value for row ridx and the feature at the gidx_pos in the gidx_buffer
   __forceinline__ __device__ int GetGidx(size_t ridx, size_t gidx_pos) const {
-    return (*matrix)->GetGidx(ridx, gidx_pos);
+    if (data_layout == CompressedDataLayout::kCSR) {
+      auto row_begin = gidx_row_iter[ridx];
+      auto row_end = gidx_row_iter[ridx + 1];
+      return ((row_end > row_begin) && ((gidx_pos % row_stride) < (row_end - row_begin))) ?
+        gidx_buffer_iter[row_begin + gidx_pos % row_stride]
+        : null_gidx_value;
+    } else if (data_layout == CompressedDataLayout::kRowStride) {
+      return gidx_buffer_iter[ridx * row_stride + gidx_pos % row_stride];
+    }
+    return null_gidx_value;
   }
 
   __forceinline__ __device__ void Write(const CompressRowContext &com_ctx) {
-    return (*matrix)->Write(com_ctx);
+    if (data_layout == CompressedDataLayout::kCSR) {
+      if (com_ctx.bin_ != null_gidx_value) {
+        gidx_buffer_writer.AtomicWriteSymbol(gidx_buffer.data(), com_ctx.bin_,
+          com_ctx.row_offset_in_batch_ - com_ctx.base_item_offset_ +
+          com_ctx.total_items_processed_ + com_ctx.ifeature_);
+
+        // TODO(sriramch): There may be multiple writes to the row_buffer at irow + base_row
+        // It should be harmless, as the writes are atomic. Explore if there is a way to avoid it,
+        // as the atomic ops are needless after the first write
+        gidx_row_writer.AtomicWriteSymbol(gidx_row_buffer.data(),
+          com_ctx.row_offset_in_batch_ - com_ctx.base_item_offset_ + com_ctx.total_items_processed_,
+          (com_ctx.irow_ + com_ctx.base_row_));
+
+        // Write to the last element of the row index containing total number of items
+        if (com_ctx.irow_ + com_ctx.base_row_ + 1 == n_rows) {
+          gidx_row_writer.AtomicWriteSymbol(gidx_row_buffer.data(), n_items, n_rows);
+        }
+      }
+    } else if (data_layout == CompressedDataLayout::kRowStride) {
+      gidx_buffer_writer.AtomicWriteSymbol(
+        gidx_buffer.data(), com_ctx.bin_,
+        (com_ctx.irow_ + com_ctx.base_row_) * row_stride + com_ctx.ifeature_);
+    }
   }
 
   ELLPackMatrix(
-    common::Span<uint32_t> feature_segments,
-    common::Span<bst_float> min_fvalue,
-    common::Span<bst_float> gidx_fvalue_map,
+    common::Span<uint32_t> fsegs,
+    common::Span<bst_float> min_fval,
+    common::Span<bst_float> gidx_fval,
     common::CompressedBufferWriter buf_wr,
     common::CompressedIterator<uint32_t> buf_iter,
     common::Span<common::CompressedByteT> buf,
     common::CompressedBufferWriter row_wr,
     common::CompressedIterator<uint32_t> row_iter,
     common::Span<common::CompressedByteT> row_buf,
-    size_t row_stride,
-    bool is_dense,
-    int null_gidx_value,
-    size_t n_rows,
-    size_t n_items,
-    CompressedDataLayout data_layout) {
-      // Allocate memory for the base type pointer on device
-      dh::safe_cuda(cudaMalloc(&matrix, sizeof(MatrixBase **)));
-
-      if (is_dense) {
-        DeviceMatrixTypeCreatorKernel<MatrixBase, DenseMatrix><<<1, 1>>>(
-          matrix, feature_segments, min_fvalue, gidx_fvalue_map,
-          buf_wr, buf_iter, buf, null_gidx_value, row_stride);
-      } else if (data_layout == CompressedDataLayout::kRowStride) {
-        DeviceMatrixTypeCreatorKernel<MatrixBase, RowStrideMatrix><<<1, 1>>>(
-          matrix, feature_segments, min_fvalue, gidx_fvalue_map,
-          buf_wr, buf_iter, buf, null_gidx_value, row_stride);
-      } else if (data_layout == CompressedDataLayout::kCSR) {
-        DeviceMatrixTypeCreatorKernel<MatrixBase, CSRMatrix><<<1, 1>>>(
-          matrix, feature_segments, min_fvalue, gidx_fvalue_map,
-          buf_wr, buf_iter, buf, null_gidx_value, row_stride, row_wr, row_iter, row_buf,
-          n_rows, n_items);
-      }
-
-      this->is_dense = is_dense;
-      this->data_layout = data_layout;
-  }
-};
-
-struct DeviceMatrixTypeDestroyer {
-  void operator()(ELLPackMatrix *ellpack) {
-    DeviceMatrixTypeDestroyerKernel<<<1, 1>>>(ellpack->matrix);
-    dh::safe_cuda(cudaFree(ellpack->matrix));
-    delete ellpack;
-  }
+    size_t rs,
+    bool dense,
+    int ngidx,
+    size_t nrows,
+    size_t nitems,
+    CompressedDataLayout layout)
+    : feature_segments(fsegs),
+      min_fvalue(min_fval),
+      gidx_fvalue_map(gidx_fval),
+      null_gidx_value(ngidx),
+      row_stride(rs),
+      gidx_buffer_writer(buf_wr),
+      gidx_buffer_iter(buf_iter),
+      gidx_buffer(buf),
+      gidx_row_writer(row_wr),
+      gidx_row_iter(row_iter),
+      gidx_row_buffer(row_buf),
+      n_rows(nrows),
+      n_items(nitems),
+      is_dense(dense),
+      data_layout(layout) {}
 };
 
 // With constraints
@@ -813,7 +709,7 @@ struct DeviceShard {
 
   dh::BulkAllocator ba;
 
-  std::unique_ptr<ELLPackMatrix, DeviceMatrixTypeDestroyer> ellpack_matrix;
+  std::unique_ptr<ELLPackMatrix> ellpack_matrix;
 
   std::unique_ptr<RowPartitioner> row_partitioner;
   DeviceHistogram<GradientSumT> hist;
@@ -1247,8 +1143,12 @@ struct DeviceShard {
                                   tree[candidate.nid].RightChild());
   }
 
-  void InitRoot(RegTree* p_tree, dh::AllReducer* reducer, int64_t num_columns) {
+  void InitRoot(RegTree* p_tree, HostDeviceVector<GradientPair>* gpair_all,
+                dh::AllReducer* reducer, int64_t num_columns) {
     constexpr int kRootNIdx = 0;
+
+    const auto &gpair = gpair_all->DeviceSpan(device_id);
+    dh::SumReduction(temp_memory, gpair, node_sum_gradients_d, gpair.size());
 
     reducer->AllReduceSum(
         shard_idx, reinterpret_cast<float*>(node_sum_gradients_d.data()),
@@ -1256,7 +1156,7 @@ struct DeviceShard {
     reducer->Synchronize(device_id);
     dh::safe_cuda(cudaMemcpy(node_sum_gradients.data(),
                              node_sum_gradients_d.data(),
-                             sizeof(GradientPair) * node_sum_gradients_d.size(),
+                             sizeof(GradientPair),
                              cudaMemcpyDeviceToHost));
 
     this->BuildHist(kRootNIdx);
@@ -1281,15 +1181,12 @@ struct DeviceShard {
                   RegTree* p_tree, dh::AllReducer* reducer) {
     auto& tree = *p_tree;
 
-    const auto &gpair_input = gpair_all->DeviceSpan(device_id);
-    dh::SumReduction(temp_memory, gpair_input, node_sum_gradients_d, gpair_input.size());
-
     monitor.StartCuda("Reset");
     this->Reset(gpair_all, p_fmat->Info().num_col_);
     monitor.StopCuda("Reset");
 
     monitor.StartCuda("InitRoot");
-    this->InitRoot(p_tree, reducer, p_fmat->Info().num_col_);
+    this->InitRoot(p_tree, gpair_all, reducer, p_fmat->Info().num_col_);
     monitor.StopCuda("InitRoot");
     auto timestamp = qexpand->size();
     auto num_leaves = 1;
