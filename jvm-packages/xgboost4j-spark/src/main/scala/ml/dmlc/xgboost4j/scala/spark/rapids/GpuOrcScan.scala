@@ -181,6 +181,11 @@ class GpuOrcPartitionReader(
     val stripes = buildOutputStripes(splitStripes, evolution,
       sargApp, sargColumns, OrcConf.IGNORE_NON_UTF8_BLOOM_FILTERS.getBoolean(conf),
       orcReader.getWriterVersion, dataReader)
+    if (stripes.length == 0) {
+      val end = partFile.start + partFile.length
+      logWarning("Couldn't find orc stripes from file: " + partFile.filePath +
+        ", range: " + partFile.start + "-"  + end)
+    }
     OrcPartitionReaderContext(updatedReadSchema, evolution, dataReader, orcReader,
       stripes.iterator.buffered)
   }

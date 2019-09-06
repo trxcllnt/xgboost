@@ -32,7 +32,7 @@ import org.apache.parquet.bytes.BytesUtils
 import org.apache.parquet.format.converter.ParquetMetadataConverter
 import org.apache.parquet.hadoop.ParquetFileReader
 import org.apache.parquet.hadoop.metadata.{BlockMetaData, ColumnChunkMetaData, ColumnPath, FileMetaData, ParquetMetadata}
-import org.apache.parquet.schema.{MessageType, Types}
+import org.apache.parquet.schema.{MessageType}
 import org.apache.spark.SerializableWritable
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
@@ -52,7 +52,7 @@ case class GpuParquetPartitionReaderFactory(
     castAllToFloats: Boolean,
     castSchema: StructType,
     debugDumpPrefix: String,
-    maxReadBatchSize: Integer) extends FilePartitionReaderFactory {
+    maxReadBatchSize: Integer) extends FilePartitionReaderFactory with Logging {
 
   override def supportColumnarReads(partition: FilePartition): Boolean = true
 
@@ -73,6 +73,11 @@ case class GpuParquetPartitionReaderFactory(
     val columnPaths = fileSchema.getPaths.asScala.map(x => ColumnPath.get(x: _*))
     val clippedBlocks = ParquetPartitionReader.clipBlocks(columnPaths, blocks.asScala)
     // val debugDumpPrefix = conf.get("spark.rapids.splits.debug-dump-prefix", null)
+    if (clippedBlocks.length == 0) {
+      val end = file.start + file.length
+      logWarning("Couldn't find parquet row groups from file: " + file.filePath +
+        ", range: " + file.start + "-"  + end)
+    }
     new ParquetPartitionReader(conf, file, filePath, clippedBlocks, fileSchema,
       dataSchema, debugDumpPrefix, castAllToFloats, castSchema, maxReadBatchSize)
   }
