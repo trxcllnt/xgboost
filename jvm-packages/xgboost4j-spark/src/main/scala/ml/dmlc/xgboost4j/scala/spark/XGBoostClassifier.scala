@@ -208,40 +208,6 @@ class XGBoostClassifier (
 
   override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
 
-  private def getNumberClasses(dataset: GpuDataset, maxNumClass: Int = 100): Int = {
-     /*
-      * Now GpuDataset does not support to get classes number,
-      * So try to figure it out in this order:
-      * 1) From the StructField of label
-      * 2) From evalMetric
-      * 3) From param 'numClass'
-      */
-    val labelSchema = dataset.schema($(labelCol))
-    val classNum = Attribute.fromStructField(labelSchema) match {
-      case binAttr: BinaryAttribute => Some(2)
-      case nomAttr: NominalAttribute => nomAttr.getNumValues
-      case _: NumericAttribute | UnresolvedAttribute => None
-    }
-    classNum match {
-      case Some(n: Int) => n
-      case None =>
-        // Attempt to automatically detect the number of classes from the label data.
-
-        val (numClasses, time) = GpuDataset.time("Find num classes") {
-          dataset.findNumClasses($(labelCol))
-        }
-        logDebug("Benchmark[Find num classes] " + time)
-        require(numClasses <= maxNumClass, s"Classifier inferred $numClasses from label values" +
-          s" in column $labelCol, but this exceeded the max numClasses ($maxNumClass) allowed" +
-          s" to be inferred from values.  To avoid this error for labels with > $maxNumClass" +
-          s" classes, specify numClasses explicitly in the metadata; this can be done by applying" +
-          s" StringIndexer to the label column.")
-        logInfo(this.getClass.getCanonicalName + s" inferred $numClasses classes for" +
-          s" labelCol=$labelCol since numClasses was not specified in the column metadata.")
-        numClasses
-    }
-  }
-
   def fit(dataset: GpuDataset): XGBoostClassificationModel = {
     if (!isDefined(evalMetric) || $(evalMetric).isEmpty) {
       set(evalMetric, setupDefaultEvalMetric())
@@ -249,22 +215,21 @@ class XGBoostClassifier (
     if (isDefined(customObj) && $(customObj) != null) {
       set(objectiveType, "classification")
     }
-    val _numClasses = getNumberClasses(dataset)
-    this.logInfo(s"Got 'numClass'=${_numClasses} for GpuDataset")
-    if (isDefined(numClass)) {
-      val expectedNumClasses = if (_numClasses <= 2) 1 else _numClasses
-      require($(numClass) == expectedNumClasses, "The number of classes in Dataset doesn't match " +
-        "\'num_class\' in parameters.")
-    } else {
-      require(_numClasses <= 2, "Param 'num_class' should be set for multiple classification!")
-    }
+
     val weightColName = if (isDefined(weightCol)) $(weightCol) else null
     val colNames = XGBoost.buildGDFColumnNames($(featuresCols), $(labelCol),
       weightColName, null)
     val derivedXGBParamMap = MLlib2XGBoostParams
     val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, colNames,
-      derivedXGBParamMap, getGpuEvalSets(xgboostParams))
-    val model = new XGBoostClassificationModel(uid, _numClasses, _booster)
+      derivedXGBParamMap, getGpuEvalSets(xgboostParams), true)
+
+    // Alreadly moved numClass checking to executor end.
+    // Here we just keep right for binary classification
+    var __numClass = 2
+    if (isDefined(numClass) && $(numClass) > 2) {
+      __numClass = $(numClass)
+    }
+    val model = new XGBoostClassificationModel(uid, __numClass, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)
     copyValues(model)

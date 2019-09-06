@@ -44,7 +44,7 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
     assert(classifier.getFeaturesCols.length == 2)
   }
 
-  test("test XGBoost-Spark XGBoostClassifier the overloaded 'fit' should work with GpuDataset") {
+  test("test XGBoost-Spark XGBoostClassifier wrong num_class checking") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.2f,
@@ -63,14 +63,38 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
 
-    // num_class is required for multiple classification
-    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
-    // Invalid num_class
-    classifier.setNumClass(-1)
-    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
-    // num_class can be verified by automatic detection
     classifier.setNumClass(50)
-    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
+    var result = false
+    try {
+      val model = classifier.fit(trainDataAsGpuDS)
+      result = true
+    } catch {
+      case e: Throwable => {
+        result = false
+      }
+    }
+    // wrong num_class will be failed to check
+    assert(result == false)
+  }
+
+  test("test XGBoost-Spark XGBoostClassifier the overloaded 'fit' should work with GpuDataset") {
+    val paramMap = Map(
+      "silent" -> 1,
+      "eta" -> 0.2f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_round" -> 30,
+      "num_workers" -> 1,
+      "timeout_request_workers" -> 60000L)
+    val csvSchema = new StructType()
+      .add("b", FloatType)
+      .add("c", FloatType)
+      .add("d", FloatType)
+      .add("e", IntegerType)
+    val trainDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
+    val classifier = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
+      .setLabelCol("e")
 
     // Per the training data, num classes is 21
     classifier.setNumClass(21)
