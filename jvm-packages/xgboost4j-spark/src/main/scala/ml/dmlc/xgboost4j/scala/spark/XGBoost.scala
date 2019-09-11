@@ -206,11 +206,8 @@ object XGBoost extends Serializable {
         }
       }
 
-      val (booster, time) = GpuDataset.time("Train: DMLC train") {
-        SXGBoost.train(dmMap(trainName), overridedParams, round, dmMap,
+      val booster = SXGBoost.train(dmMap(trainName), overridedParams, round, dmMap,
           metrics, obj, eval, earlyStoppingRound = numEarlyStoppingRounds, prevBooster)
-      }
-      logger.debug("Benchmark [DMLC train] " + time)
       Iterator(booster -> watches.toMap.keys.zip(metrics).toMap)
     } catch {
       case xgbException: XGBoostError =>
