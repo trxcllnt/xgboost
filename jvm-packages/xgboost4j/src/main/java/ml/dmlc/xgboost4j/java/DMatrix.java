@@ -27,6 +27,7 @@ import ml.dmlc.xgboost4j.LabeledPoint;
 public class DMatrix {
   protected long handle = 0;
   private int gpu_id = 0;
+  private float missing = Float.NaN;
 
   /**
    * sparse matrix type (CSR or CSC)
@@ -79,7 +80,8 @@ public class DMatrix {
    * @throws XGBoostError
    */
   @Deprecated
-  public DMatrix(long[] headers, int[] indices, float[] data, SparseType st) throws XGBoostError {
+  public DMatrix(long[] headers, int[] indices, float[] data, DMatrix.SparseType st)
+      throws XGBoostError {
     long[] out = new long[1];
     if (st == SparseType.CSR) {
       XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCSREx(headers, indices, data, 0, out));
@@ -101,7 +103,7 @@ public class DMatrix {
    *                     row number
    * @throws XGBoostError
    */
-  public DMatrix(long[] headers, int[] indices, float[] data, SparseType st, int shapeParam)
+  public DMatrix(long[] headers, int[] indices, float[] data, DMatrix.SparseType st, int shapeParam)
           throws XGBoostError {
     long[] out = new long[1];
     if (st == SparseType.CSR) {
@@ -158,7 +160,7 @@ public class DMatrix {
    * @throws XGBoostError native error
    */
   public DMatrix(long[] gdf_cols) throws XGBoostError  {
-    this(gdf_cols, 0);
+    this(gdf_cols, 0, Float.NaN);
   }
 
   /**
@@ -168,14 +170,27 @@ public class DMatrix {
    * @param gpu_id   The gpu id to use
    * @throws XGBoostError native error
    */
-  public DMatrix(long[] gdf_cols, int gpu_id) throws XGBoostError {
+  public DMatrix(long[] gdf_cols, int gpu_id, float missing) throws XGBoostError {
     if (gdf_cols == null) {
       throw new NullPointerException("gdf_cols: null");
     }
     long[] out = new long[1];
     this.gpu_id = gpu_id;
-    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out, gpu_id));
+    this.missing = missing;
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixCreateFromCUDF(gdf_cols, out, gpu_id, missing));
     handle = out[0];
+  }
+
+  /**
+   * Append CUDF to DMatrix
+   * @param gdf_cols
+   * @throws XGBoostError
+   */
+  public void appendCUDF(long[] gdf_cols) throws XGBoostError {
+    if (gdf_cols == null) {
+      throw new NullPointerException("gdf_cols: null");
+    }
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixAppendCUDF(handle, gdf_cols, gpu_id, missing));
   }
 
   /**
@@ -188,6 +203,17 @@ public class DMatrix {
   public void setCUDFInfo(String field, long[] cols) throws XGBoostError {
     XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixSetCUDFInfo(handle, field, cols, gpu_id));
   }
+
+  /**
+   * Append CUDF information for DMatrix
+   * @param field
+   * @param cols
+   * @throws XGBoostError
+   */
+  public void appendCUDFInfo(String field, long[] cols) throws XGBoostError {
+    XGBoostJNI.checkCall(XGBoostJNI.XGDMatrixAppendCUDFInfo(handle, field, cols, gpu_id));
+  }
+
   // END CUDF Support
 
   /**

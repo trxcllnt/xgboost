@@ -35,6 +35,7 @@ pipeline {
 
     parameters {
         string(name: 'REF', defaultValue: '\${gitlabBranch}', description: 'Commit to build')
+        booleanParam(name: 'BUILD_CENTOS7', defaultValue: false, description: 'Whether to enable build for Centos7')
     }
 
     // Build stages
@@ -54,7 +55,9 @@ pipeline {
             steps {
                 script {
                     echo 'run buildFactory'
-                    buildPlatformCmake("sparkgpu", buildMatrix[0], "docker-gpu", "gpu_centos7")
+                    if ( params.BUILD_CENTOS7 ) {
+                        buildPlatformCmake("sparkgpu", buildMatrix[0], "docker-gpu", "gpu_centos7")
+                    }
                 }
             }
         }
@@ -95,7 +98,7 @@ def buildPlatformCmake(buildName, conf, nodeReq, dockerTarget) {
             """.stripMargin('|')
             // Invoke command inside docker
             sh """
-            ${dockerRun} ${dockerTarget} ${dockerArgs} /bin/bash -i tests/ci_build/build_jvm_centos7.sh
+            ${dockerRun} ${dockerTarget} ${dockerArgs} scl enable devtoolset-7 'tests/ci_build/build_jvm_centos7.sh'
             """
         }
     }

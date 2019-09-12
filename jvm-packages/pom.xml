@@ -5,8 +5,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>ai.rapids</groupId>
-    <artifactId>xgboost-jvm</artifactId>
-    <version>0.90.1-Beta</version>
+    <artifactId>xgboost-jvm_2.11</artifactId>
+    <version>1.0.0-Beta</version>
     <packaging>pom</packaging>
     <name>XGBoost JVM Package</name>
     <description>JVM Package for XGBoost</description>
@@ -31,13 +31,13 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <maven.compiler.source>1.7</maven.compiler.source>
-        <maven.compiler.target>1.7</maven.compiler.target>
-        <flink.version>1.5.0</flink.version>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <flink.version>1.7.2</flink.version>
         <spark.version>2.4.3</spark.version>
         <scala.version>2.11.12</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
-        <cudf.version>0.8</cudf.version>
+        <cudf.version>0.9</cudf.version>
         <cudf.classifier>cuda10</cudf.classifier>
     </properties>
     <repositories>
@@ -57,6 +57,14 @@
             <properties>
                 <cudf.classifier></cudf.classifier>
             </properties>
+        </profile>
+        <profile>
+            <id>local-repo</id>
+            <activation>
+                <property>
+                    <name>!release-build</name>
+                </property>
+            </activation>
         </profile>
         <profile>
             <id>release</id>
@@ -290,11 +298,49 @@
         </resources>
         <plugins>
             <plugin>
+                <groupId>org.codehaus.gmaven</groupId>
+                <artifactId>gmaven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>setProperties</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>execute</goal>
+                        </goals>
+                        <configuration>
+                            <source>
+                                def standardOut = new StringBuffer()
+                                def standardErr = new StringBuffer()
+
+                                def process = 'nvcc --version'.execute()
+                                process.consumeProcessOutput(standardOut, standardErr)
+                                process.waitForOrKill(10000)
+
+                                def cudaLine = ~/Cuda compilation tools, release [.0-9]+, V([.0-9]+)/
+                                def matcher = cudaLine.matcher(standardOut)
+                                if (matcher.find()) {
+                                    switch (matcher.group(1)) {
+                                        case ~/10\\.0\\..*/:
+                                            pom.properties['cuda.version'] = 'cuda10.0'
+                                            break;
+                                        case ~/9\\.2\\..*/:
+                                            pom.properties['cuda.version'] = 'cuda9.2'
+                                            break;
+                                        default:
+                                            fail('Could not find a CUDA 9.2 or 10.0')
+                                            break;
+                                    }
+                                } else {
+                                    fail("Could not find CUDA: $standardOut $standardErr")
+                                }
+                            </source>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <configuration>
-                    <classifier>${cudf.classifier}</classifier>
-                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.scalastyle</groupId>
@@ -323,25 +369,6 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-site-plugin</artifactId>
                 <version>3.0</version>
-                <configuration>
-                    <reportPlugins>
-                        <plugin>
-                            <artifactId>maven-project-info-reports-plugin</artifactId>
-                            <version>2.2</version>
-                        </plugin>
-                        <plugin>
-                            <groupId>net.alchim31.maven</groupId>
-                            <artifactId>scala-maven-plugin</artifactId>
-                            <version>3.2.1</version>
-                            <configuration>
-                                <jvmArgs>
-                                    <jvmArg>-Xms64m</jvmArg>
-                                    <jvmArg>-Xmx1024m</jvmArg>
-                                </jvmArgs>
-                            </configuration>
-                        </plugin>
-                    </reportPlugins>
-                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -420,6 +447,25 @@
             </plugin>
         </plugins>
     </build>
+    <reporting>
+        <plugins>
+            <plugin>
+                <artifactId>maven-project-info-reports-plugin</artifactId>
+                <version>2.2</version>
+            </plugin>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>3.2.1</version>
+                <configuration>
+                    <jvmArgs>
+                        <jvmArg>-Xms64m</jvmArg>
+                        <jvmArg>-Xmx1024m</jvmArg>
+                    </jvmArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </reporting>
     <dependencies>
         <dependency>
             <groupId>com.esotericsoftware.kryo</groupId>
@@ -449,7 +495,13 @@
         <dependency>
             <groupId>org.scalatest</groupId>
             <artifactId>scalatest_${scala.binary.version}</artifactId>
-            <version>3.0.0</version>
+            <version>3.0.8</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.scalactic</groupId>
+            <artifactId>scalactic_${scala.binary.version}</artifactId>
+            <version>3.0.8</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

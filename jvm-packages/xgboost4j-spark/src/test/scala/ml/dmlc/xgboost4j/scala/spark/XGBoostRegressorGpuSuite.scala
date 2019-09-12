@@ -28,9 +28,15 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
   override def afterEach(): Unit = {
     super.afterEach()
     GpuDatasetData.regressionCleanUp()
+    // Booster holds a pointer to native gpu memory. if Booster is not be disposed.
+    // then Gpu memory will leak. From upstream. Booster's finalize (dispose) depends
+    // on JVM GC. GC is not triggered freqently, which means gpu memory already leaks.
+    // The fix is force GC in the end of each unit test.
+    System.gc()
+    System.runFinalization()
   }
 
-  test("test XGBoost-Spark XGBoostRegressor setFeaturesCols") {
+  test("GPU Regression test set multiple feature columns") {
     val regressor = new XGBoostRegressor(Map("objective" -> "reg:squarederror"))
       .setFeaturesCols(Seq("gdfCol1", "gdfCol2"))
     assert(regressor.getFeaturesCols.contains("gdfCol1"))
@@ -38,7 +44,7 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
     assert(regressor.getFeaturesCols.length == 2)
   }
 
-  test("test XGBoost-Spark XGBoostRegressor the overloaded 'fit' should work with GpuDataset") {
+  test("GPU Regression test the overloaded 'fit' should work with GpuDataset") {
     val paramMap = Map(
       "silent" -> 1,
       "eta" -> 0.1f,
@@ -72,7 +78,7 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
     // Train with eval set(s)
     val evalDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
     // 1) Set via xgboost ML API
-    regressor.setGpuEvalSets(Map("test" -> evalDataAsGpuDS))
+    regressor.setEvalSets(Map("test" -> evalDataAsGpuDS))
     val model2 = regressor.fit(trainDataAsGpuDS)
     val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
@@ -114,6 +120,7 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
       "num_workers" -> 1,
       "timeout_request_workers" -> 60000L,
       "tree_method" -> "gpu_hist",
+      "predictor" -> "gpu_predictor",
       "max_bin" -> 16
       )
 
@@ -308,5 +315,20 @@ class XGBoostRegressorGpuSuite extends FunSuite with PerTest {
     assert(resultDF.count === groundTruth)
     assert(resultDF.columns.contains("predictLeaf"))
     assert(resultDF.columns.contains("predictContrib"))
+  }
+
+  test("GPU Regression test ranking: use group data") {
+    val paramMap = Map("eta" -> "1", "max_depth" -> "6", "silent" -> "1",
+      "objective" -> "rank:pairwise", "num_workers" -> 1, "num_round" -> 5,
+      "group_col" -> "group")
+
+    val trainingDF = GpuDatasetData.getRankingTrainGpuDataset(ss)
+    val (testDF, testRowCount) = GpuDatasetData.getRankingTestGpuDataset(ss)
+    val model = new XGBoostRegressor(paramMap)
+      .setFeaturesCols(GpuDatasetData.rankingFeatureCols)
+      .fit(trainingDF)
+
+    val prediction = model.transform(testDF).collect()
+    assert(testRowCount === prediction.length)
   }
 }

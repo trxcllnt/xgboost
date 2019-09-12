@@ -238,7 +238,7 @@ class GPUPredictor : public xgboost::Predictor {
     auto& offsets = *out_offsets;
     size_t n_shards = devices_.Size();
     offsets.resize(n_shards + 2);
-    size_t rows_per_shard = dh::DivRoundUp(batch_size, n_shards);
+    size_t rows_per_shard = common::DivRoundUp(batch_size, n_shards);
     for (size_t shard = 0; shard < devices_.Size(); ++shard) {
       size_t n_rows = std::min(batch_size, shard * rows_per_shard);
       offsets[shard] = batch_offset + n_rows * n_classes;
@@ -249,6 +249,10 @@ class GPUPredictor : public xgboost::Predictor {
 
   struct DeviceShard {
     DeviceShard() : device_{-1} {}
+
+    ~DeviceShard() {
+      dh::safe_cuda(cudaSetDevice(device_));
+    }
 
     void Init(int device) {
       this->device_ = device;
@@ -284,7 +288,7 @@ class GPUPredictor : public xgboost::Predictor {
       dh::safe_cuda(cudaSetDevice(device_));
       const int BLOCK_THREADS = 128;
       size_t num_rows = batch.offset.DeviceSize(device_) - 1;
-      const int GRID_SIZE = static_cast<int>(dh::DivRoundUp(num_rows, BLOCK_THREADS));
+      const int GRID_SIZE = static_cast<int>(common::DivRoundUp(num_rows, BLOCK_THREADS));
 
       int shared_memory_bytes = static_cast<int>
         (sizeof(float) * num_features * BLOCK_THREADS);
@@ -373,8 +377,7 @@ class GPUPredictor : public xgboost::Predictor {
   }
 
  public:
-  GPUPredictor()  // NOLINT
-      : cpu_predictor_(Predictor::Create("cpu_predictor", learner_param_)) {}
+  GPUPredictor() = default;
 
   void PredictBatch(DMatrix* dmat, HostDeviceVector<bst_float>* out_preds,
                     const gbm::GBTreeModel& model, int tree_begin,
@@ -464,12 +467,15 @@ class GPUPredictor : public xgboost::Predictor {
                        std::vector<bst_float>* out_preds,
                        const gbm::GBTreeModel& model, unsigned ntree_limit,
                        unsigned root_index) override {
-    cpu_predictor_->PredictInstance(inst, out_preds, model, root_index);
+    LOG(FATAL) << "Internal error: " << __func__
+               << " is not implemented in GPU Predictor.";
   }
+
   void PredictLeaf(DMatrix* p_fmat, std::vector<bst_float>* out_preds,
                    const gbm::GBTreeModel& model,
                    unsigned ntree_limit) override {
-    cpu_predictor_->PredictLeaf(p_fmat, out_preds, model, ntree_limit);
+    LOG(FATAL) << "Internal error: " << __func__
+               << " is not implemented in GPU Predictor.";
   }
 
   void PredictContribution(DMatrix* p_fmat,
@@ -477,9 +483,8 @@ class GPUPredictor : public xgboost::Predictor {
                            const gbm::GBTreeModel& model, unsigned ntree_limit,
                            bool approximate, int condition,
                            unsigned condition_feature) override {
-    cpu_predictor_->PredictContribution(p_fmat, out_contribs, model, ntree_limit,
-                                       approximate, condition,
-                                       condition_feature);
+    LOG(FATAL) << "Internal error: " << __func__
+               << " is not implemented in GPU Predictor.";
   }
 
   void PredictInteractionContributions(DMatrix* p_fmat,
@@ -487,14 +492,13 @@ class GPUPredictor : public xgboost::Predictor {
                                        const gbm::GBTreeModel& model,
                                        unsigned ntree_limit,
                                        bool approximate) override {
-    cpu_predictor_->PredictInteractionContributions(p_fmat, out_contribs, model,
-                                                   ntree_limit, approximate);
+    LOG(FATAL) << "Internal error: " << __func__
+               << " is not implemented in GPU Predictor.";
   }
 
-  void Init(const std::vector<std::pair<std::string, std::string>>& cfg,
-            const std::vector<std::shared_ptr<DMatrix>>& cache) override {
-    Predictor::Init(cfg, cache);
-    cpu_predictor_->Init(cfg, cache);
+  void Configure(const std::vector<std::pair<std::string, std::string>>& cfg,
+                 const std::vector<std::shared_ptr<DMatrix>>& cache) override {
+    Predictor::Configure(cfg, cache);
 
     GPUSet devices = GPUSet::All(learner_param_->gpu_id, learner_param_->n_gpus);
     ConfigureShards(devices);
@@ -513,7 +517,6 @@ class GPUPredictor : public xgboost::Predictor {
       });
   }
 
-  std::unique_ptr<Predictor> cpu_predictor_;
   std::vector<DeviceShard> shards_;
   GPUSet devices_;
   common::Monitor monitor_;

@@ -38,6 +38,13 @@ if (USE_CUDA)
     target_link_libraries(testxgboost PRIVATE ${NCCL_LIBRARY})
   endif (USE_NCCL)
 
+  if (USE_CUDF)
+    find_package(CUDF REQUIRED)
+    find_package(RMM REQUIRED)
+    include_directories(${CUDF_INCLUDE_DIR} ${RMM_INCLUDE_DIR})
+    add_definitions(-DXGBOOST_USE_CUDF)
+  endif (USE_CUDF)
+
   if (USE_NVTX)
     target_include_directories(testxgboost PRIVATE "${NVTX_HEADER_DIR}")
     target_compile_definitions(testxgboost PRIVATE -DXGBOOST_USE_NVTX=1)

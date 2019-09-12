@@ -236,6 +236,8 @@ trait HasFeaturesCols extends Params {
   final val featuresCols: SeqStringParam = new SeqStringParam(this, "featuresCols",
     "name of multiple features columns.")
 
+  setDefault(featuresCols, Seq("features"))
+
   /** @group getParam */
   final def getFeaturesCols: Seq[String] = $(featuresCols)
 }
