@@ -69,7 +69,7 @@ private[spark] class GpuDatasetRDD(
   override protected def getPreferredLocations(split: Partition): Seq[String] = {
     val filePart = split.asInstanceOf[FilePartition]
     val hostToNumBytes = scala.collection.mutable.HashMap.empty[String, Long]
-    filePart.files.foreach { file =>
+    GpuDataset.getFiles(filePart).foreach { file =>
       try {
         file.locations.filter(_ != "localhost").foreach { host =>
           hostToNumBytes(host) = hostToNumBytes.getOrElse(host, 0L) + file.length
