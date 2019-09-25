@@ -74,6 +74,8 @@ if __name__ == "__main__":
         cuda = "cuda9.2"
     elif len(sys.argv) >= 2 and sys.argv[1].lower() == "cuda10.0":
         cuda = "cuda10.0"
+    elif len(sys.argv) >= 2 and sys.argv[1].lower() == "cuda10.1":
+        cuda = "cuda10.1"
     else:
         raise Exception("cuda version required as the first argument")
 
