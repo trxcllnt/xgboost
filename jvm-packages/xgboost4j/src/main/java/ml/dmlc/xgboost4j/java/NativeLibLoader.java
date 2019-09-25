@@ -56,10 +56,11 @@ class NativeLibLoader {
           logger.info("could not get CUDA version, fall back on version 9.2");
           return "9.2.0";
         });
-    String majorVersion = version.indexOf('.') > 0
-        ? version.substring(0, version.indexOf('.'))
+    assert version.indexOf('.') + 2 <= version.length(): "cuda version format error!";
+    String mainVersion = version.indexOf('.') > 0
+        ? version.substring(0, version.indexOf('.') + 2)
         : version;
-    String folder = Integer.parseInt(majorVersion) >= 10 ? "cuda10.0/" : "cuda9.2/";
+    String folder = "cuda" + mainVersion + "/";
     logger.info(String.format("found folder %s for CUDA %s", folder, version));
     return folder;
   }

@@ -17,8 +17,12 @@ cd jvm-packages
 . /opt/tools/to_cuda9.2.sh
 rm -rf ../build
 ./create_jni.py cuda9.2
+. /opt/tools/to_cuda10.1.sh
+rm -rf ../build
+./create_jni.py cuda10.1
 . /opt/tools/to_cuda10.0.sh
 rm -rf ../build
 mvn $BUILD_ARG clean package deploy
 
 cd ..
+
