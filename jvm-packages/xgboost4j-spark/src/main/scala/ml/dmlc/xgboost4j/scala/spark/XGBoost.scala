@@ -197,12 +197,8 @@ object XGBoost extends Serializable {
         logger.debug("Infered num class: " + inferedNumClass)
         if (params.contains("num_class")) {
           val userNumClass = params("num_class")
-          val expectedNumClasses = if (inferedNumClass <= 2) 1 else inferedNumClass
-          require(userNumClass == expectedNumClasses, "The number of classes in Dataset doesn't" +
+          require(userNumClass == inferedNumClass, "The number of classes in Dataset doesn't" +
             " match  \'num_class\' in parameters.")
-        } else {
-          require(inferedNumClass <= 2, "Param 'num_class' should be set for" +
-            " multiple classification!")
         }
       }
 

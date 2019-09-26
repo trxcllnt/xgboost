@@ -28,11 +28,14 @@ if [ "$SIGN_FILE" == true ]; then
 fi
 
 ###### Build jar and its libraries ######
-rm -rf build
 cd jvm-packages
-## 1) Build libxgboost4j.so for CUDA9.2
+## 1) Build libxgboost4j.so for CUDA9.2 CUDA10.1
+rm -rf ../build
 . /opt/tools/to_cuda9.2.sh
 ./create_jni.py cuda9.2
+rm -rf ../build
+. /opt/tools/to_cuda10.1.sh
+./create_jni.py cuda10.1
 ## 2) Build libxgboost4j.so for CUDA10.0 and the jar file
 rm -rf ../build
 . /opt/tools/to_cuda10.0.sh
@@ -42,4 +45,4 @@ mvn clean package $BUILD_ARG
 stashJars xgboost4j
 stashJars xgboost4j-spark
 
-cd -
+cd ..

@@ -14,17 +14,23 @@ ADD https://gitlab.com/nvidia/cuda/raw/master/dist/centos7/9.2/base/cuda.repo /e
 # install cuda
 ARG CUDA_A_VERSION=9-2-9.2.148-1
 ARG CUDA_B_VERSION=10-0-10.0.130-1
+ARG CUDA_C_VERSION=10-1-10.1.168-1
 RUN yum install -y \
     cuda-cudart-$CUDA_A_VERSION \
     cuda-cudart-$CUDA_B_VERSION \
+    cuda-cudart-$CUDA_C_VERSION \
     cuda-libraries-$CUDA_A_VERSION \
     cuda-libraries-$CUDA_B_VERSION \
+    cuda-libraries-$CUDA_C_VERSION \
     cuda-libraries-dev-$CUDA_A_VERSION \
     cuda-libraries-dev-$CUDA_B_VERSION \
+    cuda-libraries-dev-$CUDA_C_VERSION \
     cuda-command-line-tools-$CUDA_A_VERSION \
     cuda-command-line-tools-$CUDA_B_VERSION \
+    cuda-command-line-tools-$CUDA_C_VERSION \
     cuda-minimal-build-$CUDA_A_VERSION \
     cuda-minimal-build-$CUDA_B_VERSION \
+    cuda-minimal-build-$CUDA_C_VERSION \
     cuda-compat-10-0
 
 # setup cuda env
@@ -36,6 +42,7 @@ ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
 # below has XGBoost related stuff
 ARG CUDA_A=cuda9.2
 ARG CUDA_B=cuda10.0
+ARG CUDA_C=cuda10.1
 
 # install basic softwares
 RUN yum install -y zlib-devel bzip2 centos-release-scl && \
@@ -55,6 +62,12 @@ RUN curl -o nccl_v2.4.7-1.zip https://codeload.github.com/NVIDIA/nccl/zip/v2.4.7
     make -j4 src.build && \
     make pkg.txz.build && \
     tar -xf build/pkg/txz/nccl_2.4.7-1+${CUDA_B}_x86_64.txz -C /usr/local/ && \
+    make clean && \
+    rm -f /usr/local/cuda && \
+    ln -s cuda-10.1 /usr/local/cuda && \
+    make -j4 src.build && \
+    make pkg.txz.build && \
+    tar -xf build/pkg/txz/nccl_2.4.7-1+${CUDA_C}_x86_64.txz -C /usr/local/ && \
     cd .. && \
     rm -rf nccl-2.4.7-1 nccl_v2.4.7-1.zip /usr/local/cuda
 
@@ -69,10 +82,16 @@ RUN conda init --all && \
     conda install -y cmake openjdk maven && \
     conda create -y -n ${CUDA_A} python=3.7 && \
     conda create -y -n ${CUDA_B} python=3.7 && \
+    conda create -y -n ${CUDA_C} python=3.7 && \
     conda activate ${CUDA_A} && \
     conda install -y -c rapidsai-nightly/label/${CUDA_A} libcudf librmm && \
     conda activate ${CUDA_B} && \
+    conda install -y -c rapidsai-nightly/label/${CUDA_B} libcudf librmm && \
+    conda activate ${CUDA_C} && \
     conda install -y -c rapidsai-nightly/label/${CUDA_B} libcudf librmm
+
+# Note: we install cuda10.0 label of libcudf & librmm to cuda10.1, because there's no cuda10.1 for rapidsai-nightly
+# We only use header file, so it's ok
 
 # set default environments
 RUN ln -s cuda-10.0 /usr/local/cuda && \
@@ -84,5 +103,6 @@ ENV RMM_ROOT=/opt/conda/envs/${CUDA_B}
 # add tools to switch between envs
 ADD centos7_to_cuda9.2.sh /opt/tools/to_cuda9.2.sh
 ADD centos7_to_cuda10.0.sh /opt/tools/to_cuda10.0.sh
+ADD centos7_to_cuda10.1.sh /opt/tools/to_cuda10.1.sh
 
 RUN chmod 777 /usr/local

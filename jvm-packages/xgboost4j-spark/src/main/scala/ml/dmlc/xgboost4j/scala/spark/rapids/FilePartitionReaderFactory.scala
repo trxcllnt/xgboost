@@ -25,7 +25,7 @@ abstract class FilePartitionReaderFactory extends PartitionReaderFactory {
   override def createColumnarReader(partition: FilePartition): PartitionReader[GpuColumnBatch] = {
     assert(partition.isInstanceOf[FilePartition])
     val filePartition = partition.asInstanceOf[FilePartition]
-    val iter = filePartition.files.toIterator.map { file =>
+    val iter = GpuDataset.getFiles(filePartition).toIterator.map { file =>
       PartitionedFileReader(file, buildColumnarReader(file))
     }
     new FilePartitionReader[GpuColumnBatch](iter)

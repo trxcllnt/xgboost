@@ -6,10 +6,10 @@
     <parent>
         <groupId>ai.rapids</groupId>
         <artifactId>xgboost-jvm_2.11</artifactId>
-        <version>1.0.0-Beta</version>
+        <version>1.0.0-Beta2</version>
     </parent>
     <artifactId>xgboost4j_2.11</artifactId>
-    <version>1.0.0-Beta</version>
+    <version>1.0.0-Beta2</version>
     <packaging>jar</packaging>
 
     <dependencies>

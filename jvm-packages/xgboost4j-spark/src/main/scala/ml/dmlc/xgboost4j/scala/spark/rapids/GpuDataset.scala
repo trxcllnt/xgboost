@@ -119,7 +119,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     }
 
     // build a list of all input files sorted from largest to smallest
-    var files = partitions.flatMap(_.files)
+    var files = partitions.flatMap(fp => GpuDataset.getFiles(fp))
     var permitNumPartitions = numPartitions
     files = if (files.length < numPartitions) {
       val totalSize = files.map(_.length).sum
@@ -462,6 +462,13 @@ object GpuDataset {
     }
   }
 
+  private[xgboost4j] def getFiles(fp: FilePartition): Seq[PartitionedFile] = {
+    fp.getClass.getMethod("files").invoke(fp) match {
+      case files: Array[PartitionedFile] => Seq(files: _*)
+      case files => files.asInstanceOf[Seq[PartitionedFile]]
+    }
+  }
+
   private def maxDoubleMapper(columnIndex: Int): Iterator[GpuColumnBatch] => Iterator[Double] =
     (iter: Iterator[GpuColumnBatch]) => {
       // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
@@ -582,10 +589,19 @@ object GpuDataset {
       case e: NoSuchMethodError =>
         logger.debug("FilePartition, normal Apache Spark version failed")
         // assume this is the one overloaded class we know about
-        val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
-          getMethod("apply", classOf[Int], classOf[Seq[PartitionedFile]], classOf[Seq[String]])
-        fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
-          new java.lang.Integer(size), files, Seq.empty[String]).asInstanceOf[FilePartition]
+        try {
+          val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
+            getMethod("apply", classOf[Int], classOf[Seq[PartitionedFile]], classOf[Seq[String]])
+          fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
+            new java.lang.Integer(size), files, Seq.empty[String]).asInstanceOf[FilePartition]
+        } catch {
+          // for spark version 2.4.4
+          case _: NoSuchMethodException =>
+            val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
+              getMethod("apply", classOf[Int], classOf[Array[PartitionedFile]])
+            fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
+              new java.lang.Integer(size), Array(files: _*)).asInstanceOf[FilePartition]
+        }
     }
   }
 
