@@ -1,2 +1,3 @@
 tracker.py
 build.sh
+xgboost4j-spark/dependency-reduced-pom.xml

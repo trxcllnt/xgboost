@@ -70,13 +70,22 @@ def normpath(path):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1].lower() == "cuda9.2":
+        cuda = "cuda9.2"
+    elif len(sys.argv) >= 2 and sys.argv[1].lower() == "cuda10.0":
+        cuda = "cuda10.0"
+    elif len(sys.argv) >= 2 and sys.argv[1].lower() == "cuda10.1":
+        cuda = "cuda10.1"
+    else:
+        raise Exception("cuda version required as the first argument")
+
     if sys.platform == "darwin":
         # Enable of your compiler supports OpenMP.
         CONFIG["USE_OPENMP"] = "OFF"
         os.environ["JAVA_HOME"] = subprocess.check_output(
             "/usr/libexec/java_home").strip().decode()
 
-    print("building Java wrapper")
+    print("building Java wrapper on " + cuda)
     with cd(".."):
         maybe_makedirs("build")
         with cd("build"):
@@ -104,8 +113,9 @@ if __name__ == "__main__":
         "darwin": "libxgboost4j.dylib",
         "linux": "libxgboost4j.so"
     }[sys.platform]
-    maybe_makedirs("xgboost4j/src/main/resources/lib")
-    cp("../lib/" + library_name, "xgboost4j/src/main/resources/lib")
+    lib_path = "xgboost4j/src/main/resources/lib/" + cuda
+    maybe_makedirs(lib_path)
+    cp("../lib/" + library_name, lib_path)
 
     print("copying pure-Python tracker")
     cp("../dmlc-core/tracker/dmlc_tracker/tracker.py",

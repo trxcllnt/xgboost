@@ -28,6 +28,12 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
   override def afterEach(): Unit = {
     super.afterEach()
     GpuDatasetData.classifierCleanUp()
+    // Booster holds a pointer to native gpu memory. if Booster is not be disposed.
+    // then Gpu memory will leak. From upstream. Booster's finalize (dispose) depends
+    // on JVM GC. GC is not triggered freqently, which means gpu memory already leaks.
+    // The fix is force GC in the end of each unit test.
+    System.gc()
+    System.runFinalization()
   }
 
   test("test XGBoost-Spark XGBoostClassifier setFeaturesCols") {
@@ -36,6 +42,39 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
     assert(classifier.getFeaturesCols.contains("gdfCol1"))
     assert(classifier.getFeaturesCols.contains("gdfCol2"))
     assert(classifier.getFeaturesCols.length == 2)
+  }
+
+  test("test XGBoost-Spark XGBoostClassifier wrong num_class checking") {
+    val paramMap = Map(
+      "silent" -> 1,
+      "eta" -> 0.2f,
+      "max_depth" -> 2,
+      "objective" -> "multi:softprob",
+      "num_round" -> 30,
+      "num_workers" -> 1,
+      "timeout_request_workers" -> 60000L)
+    val csvSchema = new StructType()
+      .add("b", FloatType)
+      .add("c", FloatType)
+      .add("d", FloatType)
+      .add("e", IntegerType)
+    val trainDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.train.csv"))
+    val classifier = new XGBoostClassifier(paramMap)
+      .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
+      .setLabelCol("e")
+
+    classifier.setNumClass(50)
+    var result = false
+    try {
+      val model = classifier.fit(trainDataAsGpuDS)
+      result = true
+    } catch {
+      case e: Throwable => {
+        result = false
+      }
+    }
+    // wrong num_class will be failed to check
+    assert(result == false)
   }
 
   test("test XGBoost-Spark XGBoostClassifier the overloaded 'fit' should work with GpuDataset") {
@@ -57,15 +96,6 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
       .setFeaturesCols(csvSchema.fieldNames.filter(_ != "e"))
       .setLabelCol("e")
 
-    // num_class is required for multiple classification
-    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
-    // Invalid num_class
-    classifier.setNumClass(-1)
-    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
-    // num_class can be verified by automatic detection
-    classifier.setNumClass(50)
-    assertThrows[IllegalArgumentException](classifier.fit(trainDataAsGpuDS))
-
     // Per the training data, num classes is 21
     classifier.setNumClass(21)
 
@@ -86,7 +116,7 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
     // Train with eval set(s)
     val evalDataAsGpuDS = new GpuDataReader(ss).schema(csvSchema).csv(getPath("norank.eval.csv"))
     // 1) Set via xgboost ML API
-    classifier.setGpuEvalSets(Map("test" -> evalDataAsGpuDS))
+    classifier.setEvalSets(Map("test" -> evalDataAsGpuDS))
     val model2 = classifier.fit(trainDataAsGpuDS)
     val ret2 = model2.predict(Vectors.dense(994.9573036, 317.483732878, 0.0313685555674))
     // Allow big range since we don't care the accuracy
@@ -127,6 +157,7 @@ class XGBoostClassifierGpuSuite extends FunSuite with PerTest {
       "num_round" -> 100,
       "num_workers" -> 1,
       "tree_method" -> "gpu_hist",
+      "predictor" -> "gpu_predictor",
       "max_bin" -> 16)
 
     val model1 = ScalaXGBoost.train(trainingDM, paramMap, round)

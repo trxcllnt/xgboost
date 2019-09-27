@@ -24,6 +24,15 @@ __global__ void unpack_cudf_column_k
 }
 
 void MetaInfo::SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols, int gpu_id) {
+  this->SetCUDFInfoImpl(key, cols, n_cols, gpu_id, false);
+}
+
+void MetaInfo::AppendCUDFInfo(const char* key, gdf_column** cols, size_t n_cols, int gpu_id) {
+  this->SetCUDFInfoImpl(key, cols, n_cols, gpu_id, true);
+}
+
+void MetaInfo::SetCUDFInfoImpl(const char* key, gdf_column** cols, size_t n_cols,
+                               int gpu_id, bool append) {
   CHECK_GT(n_cols, 0);
   size_t n_rows = cols[0]->size;
   for (size_t i = 0; i < n_cols; ++i) {
@@ -50,12 +59,14 @@ void MetaInfo::SetCUDFInfo(const char* key, gdf_column** cols, size_t n_cols, in
     devices = GPUSet::Range(device_id, 1);
   }
 
+  size_t prev_size = (append) ? field->Size() : 0;
   field->Reshard(GPUDistribution::Granular(devices, n_cols));
-  field->Resize(n_cols * n_rows);
+  field->Resize(prev_size + n_cols * n_rows);
   bst_float* data = field->DevicePointer(device_id);
+  data += prev_size;
   for (size_t i = 0; i < n_cols; ++i) {
     int block = 256;
-    unpack_cudf_column_k<<<dh::DivRoundUp(n_rows, block), block>>>
+    unpack_cudf_column_k<<<common::DivRoundUp(n_rows, block), block>>>
       (data + i, n_rows, n_cols, *cols[i]);
     dh::safe_cuda(cudaGetLastError());
   }

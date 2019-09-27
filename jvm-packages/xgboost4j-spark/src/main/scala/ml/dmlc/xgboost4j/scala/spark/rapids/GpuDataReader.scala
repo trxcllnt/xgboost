@@ -122,13 +122,17 @@ class GpuDataReader(sparkSession: SparkSession) {
       userSpecifiedSchema = specifiedSchema,
       className = source,
       options = optionsMap).resolveRelation()
-    createDataset(fsRelation.asInstanceOf[HadoopFsRelation], sourceType, optionsMap)
+    val restOptions = optionsMap.filterKeys(!_.equalsIgnoreCase("path"))
+    createDataset(fsRelation.asInstanceOf[HadoopFsRelation], sourceType, restOptions)
   }
 
   protected def createDataset(relation: HadoopFsRelation, sourceType: String,
       sourceOptions: Map[String, String]): GpuDataset = {
     val asFloats = sourceOptions.getOrElse("asFloats", "true").toBoolean
-    new GpuDataset(relation, sourceType, sourceOptions - "asFloats", asFloats)
+    val maxRowsPerChunk: Integer = sourceOptions.getOrElse(
+      "maxRowsPerChunk", Integer.MAX_VALUE.toString).toInt
+    new GpuDataset(relation, sourceType, sourceOptions - "asFloats" - "maxRowsPerChunk",
+      asFloats, maxRowsPerChunk)
   }
 
   /**
@@ -181,6 +185,22 @@ class GpuDataReader(sparkSession: SparkSession) {
     format("parquet").load(paths: _*)
   }
 
+  /**
+   * Loads an ORC file, returning the result as a `GpuDataset`.
+   */
+  def orc(path: String): GpuDataset = {
+    // This method ensures that calls that explicit need single argument works, see SPARK-16009
+    orc(Seq(path): _*)
+  }
+
+  /**
+   * Loads an ORC file, returning the result as a `GpuDataset`.
+   */
+  @scala.annotation.varargs
+  def orc(paths: String*): GpuDataset = {
+    format("orc").load(paths: _*)
+  }
+
   private var source: String = sparkSession.sessionState.conf.defaultDataSourceName
 
   private var specifiedSchema: Option[StructType] = None
@@ -194,7 +214,10 @@ class GpuDataReader(sparkSession: SparkSession) {
     "org.apache.spark.sql.parquet" -> "parquet",
     "org.apache.spark.sql.parquet.DefaultSource" -> "parquet",
     "org.apache.spark.sql.execution.datasources.parquet" -> "parquet",
-    "org.apache.spark.sql.execution.datasources.parquet.DefaultSource" -> "parquet"
+    "org.apache.spark.sql.execution.datasources.parquet.DefaultSource" -> "parquet",
+    "orc" -> "orc",
+    "org.apache.spark.sql.hive.orc" -> "orc",
+    "org.apache.spark.sql.hive.orc.DefaultSource" -> "orc"
   )
 }
 

@@ -25,17 +25,18 @@ struct CsrCudf {
   size_t n_nz;
   size_t n_rows;
   size_t n_cols;
+  bst_float missing;
 };
 
-void RunConverter(gdf_column** gdf_data, CsrCudf* csr);
+void CUDFToCSR(gdf_column** gdf_data, CsrCudf* csr);
 
 //--- private CUDA functions / kernels
 __global__ void cuda_create_csr_k
 (void *cudf_data, gdf_valid_type* valid, gdf_dtype dtype, int col, Entry* data,
- size_t *offsets, size_t n_rows);
+ size_t *offsets, size_t n_rows, bool is_nan_missing, bst_float missing);
 
-__global__ void determine_valid_rec_count_k
-(gdf_valid_type* valid, size_t n_rows, size_t n_cols, size_t* offset);
+__global__ void determine_valid_rec_count_k(void* cudf_data, gdf_dtype dtype, gdf_valid_type *valid,
+    size_t n_rows,size_t n_cols, size_t *offset, bool is_nan_missing, bst_float missing);
 
 __device__ int WhichBitmap(int record) { return record / 8; }
 __device__ int WhichBit(int bit) { return bit % 8; }
@@ -54,7 +55,7 @@ __device__ bool IsValid(gdf_valid_type* valid, int tid) {
 }
 
 // Convert a CUDF into a CSR CUDF
-void CUDFToCSR(gdf_column** cudf_data, int n_cols, CsrCudf* csr) {
+void CUDFHandleMissingValue(gdf_column** cudf_data, int n_cols, CsrCudf* csr) {
   size_t n_rows = cudf_data[0]->size;
 
   // the first step is to create an array that counts the number of valid entries per row
@@ -68,7 +69,8 @@ void CUDFToCSR(gdf_column** cudf_data, int n_cols, CsrCudf* csr) {
   if (blocks > 0) {
     for (int i = 0; i < n_cols; ++i) {
       determine_valid_rec_count_k<<<blocks, threads>>>
-        (cudf_data[i]->valid, n_rows, n_cols, offsets);
+        (cudf_data[i]->data, cudf_data[i]->dtype, cudf_data[i]->valid, n_rows,
+            n_cols, offsets, isnan(csr->missing), csr->missing);
       dh::safe_cuda(cudaGetLastError());
       dh::safe_cuda(cudaDeviceSynchronize());
     }
@@ -85,12 +87,9 @@ void CUDFToCSR(gdf_column** cudf_data, int n_cols, CsrCudf* csr) {
   csr->n_rows = n_rows;
   csr->n_cols = n_cols;
   csr->n_nz = n_elements;
-
-  // process based on data type
-  RunConverter(cudf_data, csr);
 }
 
-void RunConverter(gdf_column** cudf_data, CsrCudf* csr) {
+void CUDFToCSR(gdf_column** cudf_data, CsrCudf* csr) {
   size_t n_cols = csr->n_cols;
   size_t n_rows = csr->n_rows;
   
@@ -107,7 +106,7 @@ void RunConverter(gdf_column** cudf_data, CsrCudf* csr) {
       gdf_column *cudf = cudf_data[col];
       cuda_create_csr_k<<<blocks, threads>>>
         (cudf->data, cudf->valid, cudf->dtype, col, csr->data,
-         offsets2.data().get(), n_rows);
+         offsets2.data().get(), n_rows, isnan(csr->missing), csr->missing);
       dh::safe_cuda(cudaGetLastError());
     }
   }
@@ -116,40 +115,43 @@ void RunConverter(gdf_column** cudf_data, CsrCudf* csr) {
 // move data over into CSR and possibly convert the format
 __global__ void cuda_create_csr_k
 (void* cudf_data, gdf_valid_type* valid, gdf_dtype dtype, int col,
- Entry* data, size_t* offsets, size_t n_rows) {
+ Entry* data, size_t* offsets, size_t n_rows, bool is_nan_missing, bst_float missing) {
   int tid = threadIdx.x + blockDim.x * blockIdx.x;
   if (tid >= n_rows)
     return;
   gdf_size_type offset_idx = offsets[tid];
   if (IsValid(valid, tid)) {
-    data[offset_idx].fvalue = ConvertDataElement(cudf_data, tid, dtype);
-    data[offset_idx].index = col;
-    ++offsets[tid];
+    bst_float v = ConvertDataElement(cudf_data, tid, dtype);
+    if (is_nan_missing || v != missing) {
+      data[offset_idx].fvalue = v;
+      data[offset_idx].index = col;
+      ++offsets[tid];
+    }
   }
 }
 
 // compute the number of valid entries per row
-__global__ void determine_valid_rec_count_k
-(gdf_valid_type *valid, size_t n_rows, size_t n_cols, size_t *offset) {
+__global__ void determine_valid_rec_count_k(void* cudf_data, gdf_dtype dtype, gdf_valid_type *valid,
+    size_t n_rows, size_t n_cols, size_t *offset, bool is_nan_missing, bst_float missing) {
 
   int tid = threadIdx.x + blockDim.x * blockIdx.x;
   if (tid >= n_rows)
     return;
-  if (IsValid(valid, tid))
-    ++offset[tid];
+  if (IsValid(valid, tid)) {
+    bst_float v = ConvertDataElement(cudf_data, tid, dtype);
+    if (is_nan_missing || v != missing) {
+      ++offset[tid];
+    }
+  }
 }
 
-void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols, int gpu_id) {
+void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols,
+                                   int gpu_id, bst_float missing) {
   CHECK_GT(n_cols, 0);
   size_t n_rows = cols[0]->size;
   info.num_col_ = n_cols;
   info.num_row_ = n_rows;
-  size_t n_entries = 0;
-  for (size_t i = 0; i < n_cols; ++i) {
-    CHECK_EQ(n_rows, cols[i]->size);
-    n_entries += cols[i]->size - cols[i]->null_count;
-  }
-  info.num_nonzero_ = n_entries;
+
   // TODO(canonizer): use the same devices as by the rest of xgboost
   int device_id = 0;
   GPUSet devices;
@@ -161,18 +163,33 @@ void SimpleCSRSource::InitFromCUDF(gdf_column** cols, size_t n_cols, int gpu_id)
   }
 
   page_.offset.Reshard(GPUDistribution::Overlap(devices, 1));
-  // TODO(canonizer): use the real row offsets for the multi-GPU case
-  std::vector<size_t> device_offsets{0, n_entries};
-  page_.data.Reshard(GPUDistribution::Explicit(devices, device_offsets));
   page_.offset.Resize(n_rows + 1);
-  page_.data.Resize(n_entries);
+
   CsrCudf csr;
-  csr.data = page_.data.DevicePointer(device_id);
   csr.offsets = page_.offset.DevicePointer(device_id);
   csr.n_nz = 0;
   csr.n_rows = n_rows;
   csr.n_cols = n_cols;
-  CUDFToCSR(cols, n_cols, &csr);
+  csr.missing = missing;
+
+  CUDFHandleMissingValue(cols, n_cols, &csr);
+
+  // TODO(canonizer): use the real row offsets for the multi-GPU case
+  info.num_nonzero_ = csr.n_nz;
+  std::vector<size_t> device_offsets{0, csr.n_nz};
+  page_.data.Reshard(GPUDistribution::Explicit(devices, device_offsets));
+  page_.data.Resize(csr.n_nz);
+
+  csr.data = page_.data.DevicePointer(device_id);
+  CUDFToCSR(cols, &csr);
+
+  // Since training copies the data back to the host (as it assumes the dataset
+  // is on the host always), move the data from the device to the host. There is
+  // no use for the data to sit on the device, if training doesn't use it.
+  // Effect this by resharding to an empty device set. This will draw the data
+  // from the device to the system memory
+  page_.data.Reshard(GPUDistribution());
+  page_.offset.Reshard(GPUDistribution());
 }
 
 }  // namespace data

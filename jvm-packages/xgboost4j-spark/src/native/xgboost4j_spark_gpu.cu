@@ -20,6 +20,7 @@
 #include <thrust/copy.h>
 #include <thrust/execution_policy.h>
 #include <thrust/functional.h>
+#include <thrust/device_ptr.h>
 
 #include "xgboost4j_spark_gpu.h"
 

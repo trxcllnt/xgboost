@@ -17,27 +17,28 @@
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.util.Locale
+import java.nio.charset.StandardCharsets
 
-import ai.rapids.cudf.{ColumnVector, CSVOptions, DType, HostMemoryBuffer, ParquetOptions, Table}
+import ai.rapids.cudf.{DType, Table}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
-import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
+import ml.dmlc.xgboost4j.java.spark.rapids.{GpuColumnBatch, PartitionReaderFactory}
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{BlockLocation, FileStatus, LocatedFileStatus, Path}
-import org.apache.hadoop.io.compress.CompressionCodecFactory
-
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.{SerializableWritable, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile}
-import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
+
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
+
 
 /*
  * Note on compatibility with different versions of Spark:
@@ -71,6 +72,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     sourceType: String,
     sourceOptions: Map[String, String],
     castAllToFloats: Boolean,
+    maxRowsPerChunk: Integer,
     specifiedPartitions: Option[Seq[FilePartition]] = None) {
 
   private val logger = LogFactory.getLog(classOf[GpuDataset])
@@ -90,11 +92,12 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     *        the types of operations performed on this RDD!
     */
   private[xgboost4j] def buildRDD: RDD[GpuColumnBatch] = {
-    val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, sourceType,
-      fsRelation.schema, sourceOptions, castAllToFloats)
     val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
     val serializableConf = new SerializableWritable[Configuration](hadoopConf)
     val broadcastedConf = sparkSession.sparkContext.broadcast(serializableConf)
+
+    val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, broadcastedConf,
+      sourceType, fsRelation.schema, sourceOptions, castAllToFloats, schema, maxRowsPerChunk)
     new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader,
       partitions, schema)
   }
@@ -103,38 +106,58 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     * Return an [[RDD]] by applying a function expecting RAPIDS cuDF column pointers
     * to each partition of this data.
     */
-  private[xgboost4j] def mapColumnarSingleBatchPerPartition[U: ClassTag](
-      func: GpuColumnBatch => Iterator[U]): RDD[U] = {
-    buildRDD.mapPartitions(GpuDataset.getMapper(func))
+  private[xgboost4j] def mapColumnarBatchPerPartition[U: ClassTag](
+      func: Iterator[GpuColumnBatch] => Iterator[U]): RDD[U] = {
+    buildRDD.mapPartitions(GpuDataset.getBatchMapper(func))
   }
 
   /** Return a new GpuDataset that has exactly numPartitions partitions. */
   def repartition(numPartitions: Int): GpuDataset = {
     if (numPartitions == partitions.length) {
       return new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
-        Some(partitions))
+        maxRowsPerChunk, Some(partitions))
     }
 
     // build a list of all input files sorted from largest to smallest
-    val files = partitions.flatMap(_.files).sortBy(_.length)(Ordering[Long].reverse)
-    // Currently do not support splitting files
-    if (files.length < numPartitions) {
-      throw new UnsupportedOperationException("Cannot create more partitions than input files")
-    }
+    var files = partitions.flatMap(fp => GpuDataset.getFiles(fp))
+    var permitNumPartitions = numPartitions
+    files = if (files.length < numPartitions) {
+      val totalSize = files.map(_.length).sum
+      var newPartitionSize = totalSize / numPartitions
+      if (newPartitionSize < 1) {
+        // to handle corner case
+        newPartitionSize = 1
+        permitNumPartitions = totalSize.toInt
+      }
+      val splitPartFiles = ArrayBuffer[PartitionedFile]()
+      for (file <- files) {
+        // make sure each partfile is smaller than newPartitionSize
+        if (file.length > newPartitionSize) {
+          splitPartFiles ++= splitFileWhenRepartition(file, newPartitionSize)
+        } else {
+          splitPartFiles += file
+        }
+      }
+      splitPartFiles
+    } else {
+      files
+    }.sortBy(_.length)(Ordering[Long].reverse)
+
 
     // Seed the partition buckets with one of the largest files then iterate
     // through the rest of the files, adding each to the smallest bucket
-    val buckets = files.take(numPartitions).map(new GpuDataset.PartBucket(_))
+    val buckets = files.take(permitNumPartitions).map(new GpuDataset.PartBucket(_))
     def bucketOrder(b: GpuDataset.PartBucket) = -b.getSize
     val queue = mutable.PriorityQueue(buckets: _*)(Ordering.by(bucketOrder))
-    for (file <- files.drop(numPartitions)) {
+    for (file <- files.drop(permitNumPartitions)) {
       val bucket = queue.dequeue()
       bucket.addFile(file)
       queue.enqueue(bucket)
     }
 
     val newPartitions = buckets.zipWithIndex.map{case (b, i) => b.toFilePartition(i)}
-    new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats, Some(newPartitions))
+    new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
+      maxRowsPerChunk, Some(newPartitions))
   }
 
   /**
@@ -143,7 +166,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     */
   def findNumClasses(labelCol: String): Int = {
     val fieldIndex = schema.fieldIndex(labelCol)
-    val rdd = mapColumnarSingleBatchPerPartition(GpuDataset.maxDoubleMapper(fieldIndex))
+    val rdd = mapColumnarBatchPerPartition(GpuDataset.maxDoubleMapper(fieldIndex))
     val maxVal = rdd.reduce(Math.max)
     val numClasses = maxVal + 1
     require(numClasses.isValidInt, s"Found max label value =" +
@@ -206,6 +229,16 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     fpath.asInstanceOf[Path]
   }
 
+
+  private def fileTypeSupportSplit(fileType: String): Boolean = {
+    fileType match {
+      case "csv" => true
+      case "parquet" => true
+      case "orc" => true
+      case _ => false
+    }
+  }
+
   private def getSplits(
       partitions: Seq[PartitionDirectory],
       maxSplitBytes: Long): Seq[PartitionedFile] = {
@@ -219,7 +252,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
             // getPath() is very expensive so we only want to call it once in this block:
             val filePath = file.getPath
             val isSplitable = fsRelation.fileFormat.isSplitable(
-              fsRelation.sparkSession, fsRelation.options, filePath)
+              fsRelation.sparkSession, fsRelation.options, filePath) &&
+              fileTypeSupportSplit(sourceType)
             splitFile(
               file = file,
               filePath = filePath,
@@ -337,8 +371,8 @@ class GpuDataset(fsRelation: HadoopFsRelation,
       isSplitable: Boolean,
       maxSplitBytes: Long,
       partitionValues: InternalRow): Seq[PartitionedFile] = {
-    // Currently there is no support for splitting a single file.
-    if (false) {  // if (isSplitable) {
+
+    if (isSplitable) {
       (0L until file.getLen by maxSplitBytes).map { offset =>
         val remaining = file.getLen - offset
         val size = if (remaining > maxSplitBytes) maxSplitBytes else remaining
@@ -347,6 +381,16 @@ class GpuDataset(fsRelation: HadoopFsRelation,
       }
     } else {
       Seq(getPartitionedFile(file, filePath, partitionValues))
+    }
+  }
+
+  private def splitFileWhenRepartition(partFile: PartitionedFile,
+                                        splitBytes: Long
+                                      ): Seq[PartitionedFile] = {
+    val partFileEnd = partFile.start + partFile.length
+    (partFile.start until partFileEnd by splitBytes).map { offset =>
+      val size = Math.min(partFileEnd - offset, splitBytes)
+      PartitionedFile(partFile.partitionValues, partFile.filePath, offset, size, partFile.locations)
     }
   }
 
@@ -403,85 +447,58 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 object GpuDataset {
   private val logger = LogFactory.getLog(classOf[GpuDataset])
 
-  private def getMapper[U: ClassTag](func: GpuColumnBatch => Iterator[U]):
-      Iterator[GpuColumnBatch] => Iterator[U] = {
+  // calculate bench mark
+  def time[R](phase: String)(block: => R): (R, Float) = {
+    val t0 = System.currentTimeMillis
+    val result = block // call-by-name
+    val t1 = System.currentTimeMillis
+    (result, (t1 - t0).toFloat / 1000)
+  }
+
+  private def getBatchMapper[U: ClassTag](
+      func: Iterator[GpuColumnBatch] => Iterator[U]): Iterator[GpuColumnBatch] => Iterator[U] = {
     batchIter: Iterator[GpuColumnBatch] => {
-      if (batchIter.hasNext) {
-        val batch = batchIter.next
-        if (batchIter.hasNext) {
-          throw new UnsupportedOperationException("Column batch iterator returned multiple batches")
-        }
-        func(batch)
-      } else {
-        Iterator.empty
-      }
+      func(batchIter)
     }
   }
 
-  private def maxDoubleMapper(columnIndex: Int): GpuColumnBatch => Iterator[Double] =
-    (b: GpuColumnBatch) => {
+  private[xgboost4j] def getFiles(fp: FilePartition): Seq[PartitionedFile] = {
+    fp.getClass.getMethod("files").invoke(fp) match {
+      case files: Array[PartitionedFile] => Seq(files: _*)
+      case files => files.asInstanceOf[Seq[PartitionedFile]]
+    }
+  }
+
+  private def maxDoubleMapper(columnIndex: Int): Iterator[GpuColumnBatch] => Iterator[Double] =
+    (iter: Iterator[GpuColumnBatch]) => {
       // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
       // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
       // it doesn't hurt to call allocateGpuDevice so just always do it.
       var gpuId = XGBoostSparkJNI.allocateGpuDevice()
       logger.debug("XGboost maxDoubleMapper get device: " + gpuId)
 
-      val column = b.getColumnVector(columnIndex)
-      val scalar = column.max()
-      if (scalar.isValid) {
-        Iterator.single(scalar.getDouble)
+      var max: Double = Double.MinValue
+      while (iter.hasNext) {
+        val b = iter.next()
+        val column = b.getColumnVector(columnIndex)
+        val scalar = column.max()
+        if (scalar.isValid) {
+          val tmp = scalar.getDouble
+          max = if (max < tmp) {
+            tmp
+          } else {
+            max
+          }
+        }
+      }
+      if (max != Double.MinValue) {
+        Iterator.single(max)
       } else {
         Iterator.empty
       }
     }
 
-  private[xgboost4j] def columnBatchToRows(batch: GpuColumnBatch): Iterator[Row] = {
-    val taskContext = TaskContext.get
-    val iter = new Iterator[Row] with AutoCloseable {
-      private val numRows = batch.getNumRows
-      private val schema = batch.getSchema
-      private val converter = new RowConverter(schema)
-      private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(batch.getNumColumns) +
-        batch.getNumColumns * 8
-      private var buffer: Long = _
-      private var nextRow = 0
-      private val row = new UnsafeRow(schema.length)
-
-      override def hasNext: Boolean = nextRow < numRows
-
-      override def next(): Row = {
-        if (nextRow >= numRows) {
-          throw new NoSuchElementException
-        }
-        if (buffer == 0) {
-          initBuffer()
-        }
-        row.pointTo(null, buffer + rowSize * nextRow, rowSize)
-        nextRow += 1
-        converter.toExternalRow(row)
-      }
-
-      override def close(): Unit = {
-        if (buffer != 0) {
-          Platform.freeMemory(buffer)
-          buffer = 0
-        }
-      }
-
-      private def initBuffer(): Unit = {
-        val nativeColumnPtrs = new Array[Long](batch.getNumColumns)
-        for (i <- 0 until batch.getNumColumns) {
-          nativeColumnPtrs(i) = batch.getColumn(i)
-        }
-        buffer = XGBoostSparkJNI.buildUnsafeRows(nativeColumnPtrs)
-      }
-    }
-
-    taskContext.addTaskCompletionListener(_ => iter.close())
-    iter
-  }
-
-  private def numericAsFloats(schema: StructType): StructType = {
+  def numericAsFloats(schema: StructType): StructType = {
     StructType(schema.fields.map {
       case StructField(name, nt: NumericType, nullable, metadata) =>
         StructField(name, FloatType, nullable, metadata)
@@ -491,187 +508,29 @@ object GpuDataset {
 
   private def getPartFileReader(
         sparkSession: SparkSession,
+        broadcastedConf: Broadcast[SerializableWritable[Configuration]],
         sourceType: String,
         schema: StructType,
         options: Map[String, String],
-        castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
+        castAllToFloats: Boolean,
+        castSchema: StructType,
+        maxRowsPerChunk: Integer): PartitionReaderFactory = {
+    val dumpPrefix = sparkSession.sessionState.conf.
+      getConfString("spark.rapids.splits.debug-dump-prefix", null)
     sourceType match {
-      case "csv" => getCsvPartFileReader(sparkSession, schema, options, castAllToFloats)
-      case "parquet" => getParquetPartFileReader(sparkSession, schema, options, castAllToFloats)
+      case "csv" =>
+        GpuCSVPartitionReaderFactory(sparkSession.sessionState.conf, broadcastedConf,
+          schema, schema, new StructType(), options, castAllToFloats, maxRowsPerChunk)
+      case "parquet" =>
+        GpuParquetPartitionReaderFactory(sparkSession.sessionState.conf, broadcastedConf, schema,
+          schema, new StructType(), Array.empty, castAllToFloats,
+          castSchema, dumpPrefix, maxRowsPerChunk)
+      case "orc" =>
+        GpuOrcPartitionReaderFactory(sparkSession.sessionState.conf, broadcastedConf, schema,
+          schema, new StructType(), Array.empty, castAllToFloats, castSchema, dumpPrefix,
+          maxRowsPerChunk)
       case _ => throw new UnsupportedOperationException(
         s"Unsupported source type: $sourceType")
-    }
-  }
-
-  private def getCsvPartFileReader(
-      sparkSession: SparkSession,
-      inputSchema: StructType,
-      options: Map[String, String],
-      castAllToFloats: Boolean): (Configuration, PartitionedFile) => Table = {
-    // Try to build CSV options on the driver here to validate and fail fast.
-    // The other CSV option build below will occur on the executors.
-    buildCsvOptions(options)
-    val schema = if (castAllToFloats) {
-      numericAsFloats(inputSchema)
-    } else {
-      inputSchema
-    }
-    (conf: Configuration, partFile: PartitionedFile) => {
-      val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
-      try {
-        val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
-        schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
-        val table = Table.readCSV(csvSchemaBuilder.build(), buildCsvOptions(options),
-          dataBuffer, dataSize)
-        val numColumns = table.getNumberOfColumns
-        if (schema.length != numColumns) {
-          table.close()
-          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
-              s"but only read ${table.getNumberOfColumns} from $partFile")
-        }
-        table
-      } finally {
-        dataBuffer.close()
-      }
-    }
-  }
-
-  private def getParquetPartFileReader(
-      sparkSession: SparkSession,
-      schema: StructType,
-      options: Map[String, String],
-      castToFloat: Boolean): (Configuration, PartitionedFile) => Table = {
-    // Try to build Parquet options on the driver here to validate and fail fast.
-    // The other Parquet option build below will occur on the executors.
-    buildParquetOptions(options, schema)
-
-    (conf: Configuration, partFile: PartitionedFile) => {
-      val (dataBuffer, dataSize) = readPartFileFully(conf, partFile)
-      try {
-        val parquetOptions = buildParquetOptions(options, schema)
-        var table = Table.readParquet(parquetOptions, dataBuffer, dataSize)
-        val numColumns = table.getNumberOfColumns
-        // The parquet loader can load more columns than requested as it will
-        // always load a pandas index column if one is found.
-        if (schema.length > numColumns) {
-          table.close()
-          throw new QueryExecutionException(s"Expected ${schema.length} columns " +
-            s"but only read ${numColumns} from $partFile")
-        }
-        if (castToFloat) {
-          val columns = new Array[ColumnVector](numColumns)
-          try {
-            for (i <- 0 until numColumns) {
-              val c = table.getColumn(i)
-              columns(i) = schema.fields(i).dataType match {
-                case nt: NumericType => c.asFloats()
-                case _ => c.incRefCount()
-              }
-            }
-            var tmp = table
-            table = new Table(columns: _*)
-            tmp.close()
-          } finally {
-            columns.foreach(v => if (v != null) v.close())
-          }
-        }
-        table
-      } finally {
-        dataBuffer.close()
-      }
-    }
-  }
-
-  private def buildCsvOptions(options: Map[String, String]): CSVOptions = {
-    val builder = CSVOptions.builder()
-    for ((k, v) <- options) {
-      val parseFunc = csvOptionParserMap.getOrElse(k, (_: CSVOptions.Builder, _: String) => {
-        throw new UnsupportedOperationException(s"CSV option $k not supported")
-      })
-      parseFunc(builder, v)
-    }
-    builder.build
-  }
-
-  private def buildParquetOptions(options: Map[String, String],
-      schema: StructType): ParquetOptions = {
-    // currently no Parquet read options are supported
-    if (options.nonEmpty) {
-      throw new UnsupportedOperationException("No Parquet read options are supported")
-    }
-    val builder = ParquetOptions.builder()
-    builder.includeColumn(schema.map(_.name): _*)
-    builder.build
-  }
-
-  private def readPartFileFully(conf: Configuration,
-      partFile: PartitionedFile): (HostMemoryBuffer, Long) = {
-    val rawPath = new Path(partFile.filePath)
-    val fs = rawPath.getFileSystem(conf)
-    val path = fs.makeQualified(rawPath)
-    val fileSize = fs.getFileStatus(path).getLen
-    var succeeded = false
-    var hmb = HostMemoryBuffer.allocate(fileSize)
-    var totalBytesRead: Long = 0L
-    try {
-      val buffer = new Array[Byte](1024 * 16)
-      val codecFactory = new CompressionCodecFactory(conf)
-      val codec = codecFactory.getCodec(path)
-      val rawInput = fs.open(path)
-      val in = if (codec != null) codec.createInputStream(rawInput) else rawInput
-      try {
-        var numBytes = in.read(buffer)
-        while (numBytes >= 0) {
-          if (totalBytesRead + numBytes > hmb.getLength) {
-            hmb = growHostBuffer(hmb, totalBytesRead + numBytes)
-          }
-          hmb.setBytes(totalBytesRead, buffer, 0, numBytes)
-          totalBytesRead += numBytes
-          numBytes = in.read(buffer)
-        }
-      } finally {
-        in.close()
-      }
-      succeeded = true
-    } finally {
-      if (!succeeded) {
-        hmb.close()
-      }
-    }
-    (hmb, totalBytesRead)
-  }
-
-  /**
-    * Grows a host buffer, returning a new buffer and closing the original
-    * after copying the data into the new buffer.
-    * @param original the original host memory buffer
-    */
-  private def growHostBuffer(original: HostMemoryBuffer, needed: Long): HostMemoryBuffer = {
-    val newSize = Math.max(original.getLength * 2, needed)
-    val result = HostMemoryBuffer.allocate(newSize)
-    try {
-      result.copyFromHostBuffer(0, original, 0, original.getLength)
-      original.close()
-    } catch {
-      case e: Throwable =>
-        result.close()
-        throw e
-    }
-    result
-  }
-
-  private def toDType(dataType: DataType): DType = {
-    dataType match {
-      case BooleanType | ByteType => DType.INT8
-      case ShortType => DType.INT16
-      case IntegerType => DType.INT32
-      case LongType => DType.INT64
-      case FloatType => DType.FLOAT32
-      case DoubleType => DType.FLOAT64
-      case DateType => DType.DATE32
-      case TimestampType => DType.TIMESTAMP
-      case unknownType => throw new UnsupportedOperationException(
-        s"Unsupported Spark SQL type $unknownType")
     }
   }
 
@@ -681,7 +540,7 @@ object GpuDataset {
    * character.
    */
   @throws[IllegalArgumentException]
-  private def toChar(str: String): Char = {
+  def toChar(str: String): Char = {
     (str: Seq[Char]) match {
       case Seq() => throw new IllegalArgumentException("Delimiter cannot be empty string")
       case Seq('\\') => throw new IllegalArgumentException("Single backslash is prohibited." +
@@ -704,7 +563,7 @@ object GpuDataset {
     }
   }
 
-  private def getBool(paramName: String, paramVal: String): Boolean = {
+  def getBool(paramName: String, paramVal: String): Boolean = {
     val lowerParamVal = paramVal.toLowerCase(Locale.ROOT)
     if (lowerParamVal == "true") {
       true
@@ -714,36 +573,6 @@ object GpuDataset {
       throw new Exception(s"$paramName flag can be true or false")
     }
   }
-
-  private def parseCSVCommentOption(b: CSVOptions.Builder, v: String): Unit = {
-    b.withComment(toChar(v))
-  }
-
-  private def parseCSVHeaderOption(b: CSVOptions.Builder, v: String): Unit = {
-    if (getBool("header", v)) {
-      b.hasHeader
-    }
-  }
-
-  private def parseCSVNullValueOption(b: CSVOptions.Builder, v: String): Unit = {
-    b.withNullValue(v)
-  }
-
-  private def parseCSVQuoteOption(b: CSVOptions.Builder, v: String): Unit = {
-    b.withQuote(toChar(v))
-  }
-
-  private def parseCSVSepOption(b: CSVOptions.Builder, v: String): Unit = {
-    b.withDelim(toChar(v))
-  }
-
-  private val csvOptionParserMap: Map[String, (CSVOptions.Builder, String) => Unit] = Map(
-    "comment" -> parseCSVCommentOption,
-    "header" -> parseCSVHeaderOption,
-    "nullValue" -> parseCSVNullValueOption,
-    "quote" -> parseCSVQuoteOption,
-    "sep" -> parseCSVSepOption
-  )
 
   private def createFilePartition(
       size: Int,
@@ -760,10 +589,19 @@ object GpuDataset {
       case e: NoSuchMethodError =>
         logger.debug("FilePartition, normal Apache Spark version failed")
         // assume this is the one overloaded class we know about
-        val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
-          getMethod("apply", classOf[Int], classOf[Seq[PartitionedFile]], classOf[Seq[String]])
-        fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
-          new java.lang.Integer(size), files, Seq.empty[String]).asInstanceOf[FilePartition]
+        try {
+          val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
+            getMethod("apply", classOf[Int], classOf[Seq[PartitionedFile]], classOf[Seq[String]])
+          fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
+            new java.lang.Integer(size), files, Seq.empty[String]).asInstanceOf[FilePartition]
+        } catch {
+          // for spark version 2.4.4
+          case _: NoSuchMethodException =>
+            val fpClass = org.apache.spark.sql.execution.datasources.FilePartition.getClass.
+              getMethod("apply", classOf[Int], classOf[Array[PartitionedFile]])
+            fpClass.invoke(org.apache.spark.sql.execution.datasources.FilePartition,
+              new java.lang.Integer(size), Array(files: _*)).asInstanceOf[FilePartition]
+        }
     }
   }
 
@@ -779,5 +617,120 @@ object GpuDataset {
     }
 
     def toFilePartition(index: Int): FilePartition = createFilePartition(index, files)
+  }
+
+  def getColumnRowNumberMapper: Iterator[GpuColumnBatch] => Iterator[(Int, Long)] = {
+    iter: Iterator[GpuColumnBatch] => {
+      var totalRows: Long = 0
+      var columns: Int = 0
+      var isFirstBunch = true
+      while (iter.hasNext) {
+        val batch = iter.next()
+        totalRows += batch.getNumRows
+        if (isFirstBunch) {
+          isFirstBunch = false
+          columns = batch.getNumColumns
+        }
+      }
+      if (isFirstBunch) {
+        Iterator.empty
+      } else {
+        Iterator((columns, totalRows))
+      }
+    }
+  }
+
+  def columnBatchToRows: Iterator[GpuColumnBatch] => Iterator[Row] = {
+    iter: Iterator[GpuColumnBatch] => {
+      val columnBatchToRow = new ColumnBatchToRow()
+      while (iter.hasNext) {
+        val batch = iter.next()
+        columnBatchToRow.appendColumnBatch(batch)
+      }
+      columnBatchToRow.toIterator
+    }
+  }
+}
+
+class ColumnBatchToRow() {
+  private var batches: Seq[ColumnBatchIter] = Seq()
+  private lazy val batchIter = batches.toIterator
+  private var currentBatchIter: ColumnBatchIter = null
+
+  def appendColumnBatch(batch: GpuColumnBatch): Unit = {
+    batches = batches :+ new ColumnBatchIter(batch)
+  }
+
+  private[xgboost4j] def toIterator: Iterator[Row] = {
+    val taskContext = TaskContext.get
+    val iter = new Iterator[Row] with AutoCloseable {
+
+      override def hasNext: Boolean = {
+        (currentBatchIter != null && currentBatchIter.hasNext) || nextIterator()
+      }
+
+      override def next(): Row = {
+        currentBatchIter.next()
+      }
+
+      override def close(): Unit = {
+        if (currentBatchIter != null) {
+          currentBatchIter.close()
+        }
+      }
+
+      private def nextIterator(): Boolean = {
+        if (batchIter.hasNext) {
+          close
+          currentBatchIter = batchIter.next()
+          try {
+            hasNext
+          }
+        } else {
+          false
+        }
+      }
+    }
+    taskContext.addTaskCompletionListener(_ => iter.close())
+    iter
+  }
+
+  class ColumnBatchIter(batch: GpuColumnBatch) extends Iterator[Row] with AutoCloseable {
+    private val numRows = batch.getNumRows
+    private val schema = batch.getSchema
+    private val timeUnits =
+      (0 until batch.getNumColumns).map(batch.getColumnVector(_).getTimeUnit)
+    private val converter = new RowConverter(schema, timeUnits)
+    private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(batch.getNumColumns) +
+      batch.getNumColumns * 8
+    private var buffer: Long = initBuffer()
+    private var nextRow = 0
+    private val row = new UnsafeRow(schema.length)
+
+    override def hasNext: Boolean = nextRow < numRows
+
+    override def next(): Row = {
+      if (nextRow >= numRows) {
+        throw new NoSuchElementException
+      }
+      row.pointTo(null, buffer + rowSize * nextRow, rowSize)
+      nextRow += 1
+      converter.toExternalRow(row)
+    }
+
+    override def close(): Unit = {
+      if (buffer != 0) {
+        Platform.freeMemory(buffer)
+        buffer = 0
+      }
+    }
+
+    private def initBuffer(): Long = {
+      val nativeColumnPtrs = new Array[Long](batch.getNumColumns)
+      for (i <- 0 until batch.getNumColumns) {
+        nativeColumnPtrs(i) = batch.getColumn(i)
+      }
+      XGBoostSparkJNI.buildUnsafeRows(nativeColumnPtrs)
+    }
   }
 }

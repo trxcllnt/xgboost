@@ -35,9 +35,10 @@ class NativeLibLoader {
 
   static synchronized void initXGBoost() throws IOException {
     if (!initialized) {
+      String cuda = getCudaFolder();
       for (String libName : libNames) {
         try {
-          String libraryFromJar = nativeResourcePath + System.mapLibraryName(libName);
+          String libraryFromJar = nativeResourcePath + cuda + System.mapLibraryName(libName);
           loadLibraryFromJar(libraryFromJar);
         } catch (IOException ioe) {
           logger.error("failed to load " + libName + " library from jar");
@@ -46,6 +47,22 @@ class NativeLibLoader {
       }
       initialized = true;
     }
+  }
+
+  private static String getCudaFolder() {
+    String version = EnvironmentDetector
+        .getCudaVersion()
+        .orElseGet(() -> {
+          logger.info("could not get CUDA version, fall back on version 9.2");
+          return "9.2.0";
+        });
+    assert version.indexOf('.') + 2 <= version.length(): "cuda version format error!";
+    String mainVersion = version.indexOf('.') > 0
+        ? version.substring(0, version.indexOf('.') + 2)
+        : version;
+    String folder = "cuda" + mainVersion + "/";
+    logger.info(String.format("found folder %s for CUDA %s", folder, version));
+    return folder;
   }
 
   /**

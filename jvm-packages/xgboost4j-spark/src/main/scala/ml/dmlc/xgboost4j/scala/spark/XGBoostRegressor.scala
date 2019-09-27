@@ -16,12 +16,14 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
+
 import scala.collection.{AbstractIterator, Iterator, mutable}
 import scala.collection.JavaConverters._
-import ml.dmlc.xgboost4j.java.{Rabit, XGBoost => JXGBoost, XGBoostSparkJNI}
+import ml.dmlc.xgboost4j.java.{Rabit, XGBoostSparkJNI}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import ml.dmlc.xgboost4j.scala.spark.params.{DefaultXGBoostParamsReader, _}
-import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
+import ml.dmlc.xgboost4j.scala.spark.rapids.{ColumnBatchToRow, GpuDataset}
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.scala.{EvalTrait, ObjectiveTrait}
 import org.apache.commons.logging.LogFactory
@@ -37,7 +39,6 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.json4s.DefaultFormats
-
 import org.apache.spark.broadcast.Broadcast
 
 private[spark] trait XGBoostRegressorParams extends GeneralParams with BoosterParams
@@ -206,11 +207,13 @@ class XGBoostRegressor (
     if (isDefined(customObj) && $(customObj) != null) {
       set(objectiveType, "regression")
     }
-
+    val weightColName = if (isDefined(weightCol)) $(weightCol) else null
+    val groupColName = if (isDefined(groupCol)) $(groupCol) else null
+    val colNames = XGBoost.buildGDFColumnNames($(featuresCols), $(labelCol),
+      weightColName, groupColName)
     val derivedXGBParamMap = MLlib2XGBoostParams
-    // No group support for GpuDataset
-    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, derivedXGBParamMap,
-      getGpuEvalSets(xgboostParams), false)
+    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, colNames,
+      derivedXGBParamMap, getGpuEvalSets(xgboostParams))
     val model = new XGBoostRegressionModel(uid, _booster)
     val summary = XGBoostTrainingSummary(_metrics)
     model.setSummary(summary).setParent(this)
@@ -264,6 +267,8 @@ class XGBoostRegressionModel private[ml] (
 
   def setTreeLimit(value: Int): this.type = set(treeLimit, value)
 
+  def setMissing(value: Float): this.type = set(missing, value)
+
   def setInferBatchSize(value: Int): this.type = set(inferBatchSize, value)
 
   /**
@@ -276,13 +281,19 @@ class XGBoostRegressionModel private[ml] (
     _booster.predict(data = dm)(0)(0)
   }
 
+  private def getMissingValue: Float = {
+    val missing = getMissing
+    if (!missing.isNaN && missing != 0.0f) {
+      throw new RuntimeException(s"you can only specify missing value as 0.0 (the currently" +
+        s" set value $missing) when you load data from GPU")
+    }
+    0.0f
+  }
+
   private def transformInternal(dataset: GpuDataset): DataFrame = {
     val schema = StructType(dataset.schema.fields ++
       Seq(StructField(name = _originalPredictionCol, dataType =
         ArrayType(FloatType, containsNull = false), nullable = false)))
-
-    // since native model will not save predictor context, force to gpu predictor
-    _booster.setParam("predictor", "gpu_predictor")
 
     val bBooster = dataset.sparkSession.sparkContext.broadcast(_booster)
     val appName = dataset.sparkSession.sparkContext.appName
@@ -300,8 +311,8 @@ class XGBoostRegressionModel private[ml] (
         s"Expect [${featuresColNames.mkString(", ")}], " +
         s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
 
-    val resultRDD = dataset.mapColumnarSingleBatchPerPartition(columnBatch => {
-      val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+    val missing = getMissingValue
+    val resultRDD = dataset.mapColumnarBatchPerPartition((iter: Iterator[GpuColumnBatch]) => {
       // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
       // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
       // it doesn't hurt to call allocateGpuDevice so just always do it.
@@ -310,18 +321,29 @@ class XGBoostRegressionModel private[ml] (
       if (gpuId == 0) {
         gpuId = -1;
       }
-      val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
-      val dm = new DMatrix(gdfColsHandles(0), gpuId)
 
-      Rabit.init(rabitEnv.asJava)
-      try {
-        val Array(rawPredictionItr, predLeafItr, predContribItr) =
-          producePredictionItrs(bBooster, dm)
-        produceResultIterator(GpuDataset.columnBatchToRows(columnBatch),
-          rawPredictionItr, predLeafItr, predContribItr)
-      } finally {
-        Rabit.shutdown()
-        dm.delete()
+      val ((dm, columnBatchToRow), time) = GpuDataset.time("Transform: build dmatrix and row") {
+        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter)
+      }
+      logger.debug("Benchmark [Transform: Build Dmatrix and Row] " + time)
+
+      if (dm == null) {
+        logger.info("No data for DMatrix")
+        Iterator.empty
+      } else {
+        val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+        Rabit.init(rabitEnv.asJava)
+        try {
+          // since native model will not save predictor context, force to gpu predictor
+          bBooster.value.setParam("predictor", "gpu_predictor")
+          val Array(rawPredictionItr, predLeafItr, predContribItr) =
+            producePredictionItrs(bBooster, dm)
+          produceResultIterator(columnBatchToRow.toIterator, rawPredictionItr,
+            predLeafItr, predContribItr)
+        } finally {
+          Rabit.shutdown()
+          dm.delete()
+        }
       }
     })
 
@@ -344,7 +366,9 @@ class XGBoostRegressionModel private[ml] (
 
         private val batchIterImpl = rowIterator.grouped($(inferBatchSize)).flatMap { batchRow =>
           if (batchCnt == 0) {
-            val rabitEnv = Array("DMLC_TASK_ID" -> TaskContext.getPartitionId().toString).toMap
+            val rabitEnv = Array(
+              "DMLC_TASK_ID" -> TaskContext.getPartitionId().toString,
+              "DMLC_WORKER_STOP_PROCESS_ON_ERROR" -> "false").toMap
             Rabit.init(rabitEnv.asJava)
           }
 

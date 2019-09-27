@@ -16,14 +16,14 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
+import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
+import ml.dmlc.xgboost4j.scala.DMatrix
+import ml.dmlc.xgboost4j.scala.spark.rapids.ColumnBatchToRow
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
-
 import org.apache.spark.ml.feature.{LabeledPoint => MLLabeledPoint}
 import org.apache.spark.ml.linalg.{DenseVector, SparseVector, Vector, Vectors}
-import org.apache.spark.ml.param.Param
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Column, DataFrame, Row}
-import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.{FloatType, IntegerType}
 
 object DataUtils extends Serializable {
@@ -104,6 +104,32 @@ object DataUtils extends Serializable {
           XGBLabeledPoint(label, indices, values, weight, baseMargin = baseMargin)
       }
     }
+  }
+
+  private[spark] def buildDMatrixIncrementally(gpuId: Int, missing: Float,
+      indices: Seq[Array[Int]], iter: Iterator[GpuColumnBatch]): (DMatrix, ColumnBatchToRow) = {
+    var dm: DMatrix = null
+    var isFirstBatch = true
+    val columnBatchToRow: ColumnBatchToRow = new ColumnBatchToRow
+
+    while (iter.hasNext) {
+      val columnBatch = iter.next()
+      val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
+
+      if (isFirstBatch) {
+        isFirstBatch = false
+        dm = new DMatrix(gdfColsHandles(0), gpuId, missing)
+      } else {
+        dm.appendCUDF(gdfColsHandles(0))
+      }
+
+       columnBatchToRow.appendColumnBatch(columnBatch)
+    }
+    if (dm == null) {
+      // here we allow empty iter
+      // throw new RuntimeException("Can't build Dmatrix from CUDF")
+    }
+    (dm, columnBatchToRow)
   }
 
 }

@@ -1,5 +1,5 @@
 /*!
- * Copyright 2016-2018 XGBoost contributors
+ * Copyright 2016-2019 XGBoost contributors
  */
 #ifndef XGBOOST_TESTS_CPP_HELPERS_H_
 #define XGBOOST_TESTS_CPP_HELPERS_H_
@@ -163,11 +163,12 @@ class SimpleRealUniformDistribution {
 std::shared_ptr<xgboost::DMatrix> *CreateDMatrix(int rows, int columns,
                                                  float sparsity, int seed = 0);
 
-std::unique_ptr<DMatrix> CreateSparsePageDMatrix(size_t n_entries, size_t page_size);
+std::unique_ptr<DMatrix> CreateSparsePageDMatrix(
+    size_t n_entries, size_t page_size, std::string tmp_file);
 
 /**
  * \fn std::unique_ptr<DMatrix> CreateSparsePageDMatrixWithRC(size_t n_rows, size_t n_cols,
- *                                                            size_t page_size);
+ *                                                            size_t page_size, bool deterministic);
  *
  * \brief Creates dmatrix with some records, each record containing random number of
  *        features in [1, n_cols]
@@ -188,8 +189,8 @@ std::unique_ptr<DMatrix> CreateSparsePageDMatrixWithRC(size_t n_rows, size_t n_c
 
 gbm::GBTreeModel CreateTestModel();
 
-inline LearnerTrainParam CreateEmptyGenericParam(int gpu_id, int n_gpus) {
-  xgboost::LearnerTrainParam tparam;
+inline GenericParameter CreateEmptyGenericParam(int gpu_id, int n_gpus) {
+  xgboost::GenericParameter tparam;
   std::vector<std::pair<std::string, std::string>> args {
     {"gpu_id", std::to_string(gpu_id)},
     {"n_gpus", std::to_string(n_gpus)}};
