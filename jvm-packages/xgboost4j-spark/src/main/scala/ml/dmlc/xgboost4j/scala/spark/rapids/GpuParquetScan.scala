@@ -246,7 +246,7 @@ class ParquetPartitionReader(
         // noinspection ScalaDeprecation
         outputColumns += ColumnChunkMetaData.get(
           column.getPath,
-          column.getType,
+          column.getPrimitiveType,
           column.getCodec,
           column.getEncodingStats,
           column.getEncodings,
