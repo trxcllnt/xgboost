@@ -39,7 +39,7 @@ rm -rf ../build
 ## 2) Build libxgboost4j.so for CUDA10.0 and the jar file
 rm -rf ../build
 . /opt/tools/to_cuda10.0.sh
-mvn clean package $BUILD_ARG
+mvn -B clean package $BUILD_ARG
 
 ###### Stash jar files for modules ######
 stashJars xgboost4j
