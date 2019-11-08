@@ -23,6 +23,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.nio.file.Paths;
+import java.util.Optional;
 
 import static org.apache.spark.sql.types.DataTypes.FloatType;
 import static org.apache.spark.sql.types.DataTypes.IntegerType;
@@ -34,8 +35,10 @@ import static org.junit.Assume.assumeTrue;
  */
 public class GpuColumnBatchTest {
 
-  private final String TEST_CSV_PATH =
-          this.getClass().getResource("/rank-weight.csv").getPath();
+  private final String TEST_CSV_PATH = Optional
+          .ofNullable(this.getClass().getResource("/rank-weight.csv"))
+          .orElseThrow(() -> new RuntimeException("Resource rank-weight.csv does not exist"))
+          .getPath();
 
   // Schemas for spark and CUDF
   private final Schema CUDF_SCHEMA = Schema.builder()
