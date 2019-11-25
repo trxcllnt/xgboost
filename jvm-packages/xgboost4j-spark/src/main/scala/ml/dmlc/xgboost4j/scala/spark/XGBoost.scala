@@ -73,6 +73,11 @@ private[spark] case class XGBLabeledPointGroup(
 private case class GDFColumnData(
     rawDataset: GpuDataset,
     colsIndices: Seq[Array[Int]])
+
+private case class WatchesMetaInfo(
+    inferNumClass: Boolean = false,
+    numClass: Double = 0.0,
+    groupIDs: Seq[Int] = Seq.empty)
 // ========= GPU Pipeline End =============
 
 object XGBoost extends Serializable {
@@ -186,21 +191,45 @@ object XGBoost extends Serializable {
       val metrics = Array.tabulate(watches.size)(_ => Array.ofDim[Float](round))
 
       // infer num class
-      if (watches.inferNumClass) {
-        val element: Array[Float] = Array(watches.numClass.toFloat)
+      if (watches.metaInfo.exists(_.inferNumClass)) {
+        val element: Array[Float] = Array(watches.metaInfo.map(_.numClass).get.toFloat)
         val numClassElement = Rabit.allReduce(element, Rabit.OpType.MAX)
 
         if (numClassElement.length <= 0) {
-          throw new XGBoostError("Couldn't infer to class numer")
+          throw new XGBoostError("Couldn't infer to class number")
         }
         val inferedNumClass = numClassElement(0).toInt + 1
 
-        logger.debug("Infered num class: " + inferedNumClass)
+        logger.info("Inferred num class: " + inferedNumClass)
         if (params.contains("num_class")) {
           val userNumClass = params("num_class")
           require(userNumClass == inferedNumClass, "The number of classes in Dataset doesn't" +
             " match  \'num_class\' in parameters.")
         }
+      }
+
+      // check group integrity
+      val checkGroupIntegrity = params.getOrElse("check_group_integrity", true)
+        .asInstanceOf[Boolean]
+      if (watches.metaInfo.exists(_.groupIDs.nonEmpty) && checkGroupIntegrity) {
+        // Copy the group ids
+        val myGroupIds = Array(watches.metaInfo.map(_.groupIDs).get: _*)
+        var allEdgeGroupIds = myGroupIds
+        val rank = Rabit.getRank
+        logger.info(s"Before broadcast Rabit $rank gids: ${allEdgeGroupIds.mkString(",")}")
+        (0 until Rabit.getWorldSize).foreach { index =>
+          if (index == rank) {
+            // broadcast my group ids to others
+            Rabit.broadcast(myGroupIds, rank)
+          } else {
+            // Get and save the group ids of others
+            allEdgeGroupIds ++= Rabit.broadcast(myGroupIds, index)
+          }
+        }
+        logger.info(s"After broadcast Rabit $rank gids: ${allEdgeGroupIds.mkString(",")}")
+        val dupGids = allEdgeGroupIds.distinct.filter(gid => allEdgeGroupIds.count(_ == gid) != 1)
+        require(dupGids.isEmpty, s"The group data with gids [${dupGids.mkString(", ")}]" +
+          s" in partition $taskId is broken!")
       }
 
       val booster = SXGBoost.train(dmMap(trainName), overridedParams, round, dmMap,
@@ -851,8 +880,7 @@ private class Watches private(
     val datasets: Array[DMatrix],
     val names: Array[String],
     val cacheDirName: Option[String],
-    val inferNumClass: Boolean = false,
-    val numClass: Double = 0.0) {
+    val metaInfo: Option[WatchesMetaInfo] = None) {
 
   def toMap: Map[String, DMatrix] = {
     names.zip(datasets).toMap.filter { case (_, matrix) => matrix.rowNum > 0 }
@@ -901,7 +929,8 @@ private object Watches {
   // Suppose "indices" are given in this order <features, label, weight, group>,
   // Pls refer to method 'checkAndGetGDFColumnIndices'.
   private def buildDMatrixIncrementally(gpuId: Int, missing: Float, indices: Seq[Array[Int]],
-      iter: Iterator[GpuColumnBatch], inferNumClass: Boolean = false): (DMatrix, Double) = {
+      iter: Iterator[GpuColumnBatch],
+      inferNumClass: Boolean = false): (DMatrix, Double, Seq[Int]) = {
 
     if (!missing.isNaN && missing != 0.0f) {
       throw new RuntimeException(s"you can only specify missing value as 0.0 (the currently" +
@@ -916,6 +945,7 @@ private object Watches {
     // For LTR
     val groupInfo = new mutable.ArrayBuffer[java.lang.Integer]
     val weightInfo = new mutable.ArrayBuffer[java.lang.Float]
+    var firstGroupId = 0
     var groupId = 0
     val isLTR = groupIndices.nonEmpty
 
@@ -923,6 +953,7 @@ private object Watches {
     while (iter.hasNext) {
       val columnBatch = iter.next()
       if (isLTR) {
+        if (isFirstBunch) firstGroupId = columnBatch.getIntInColumn(0, groupIndices(0), 0)
         // Build group info, along with weight info if needed (-1 means no weight)
         val weightIdx = if (hasWeight) weightIndices(0) else -1
         groupId = columnBatch.groupAndAggregateOnColumnsHost(groupIndices(0), weightIdx, groupId,
@@ -970,20 +1001,21 @@ private object Watches {
       // To support chunk loading, use CPU way to set weight info for LTR.
       if (hasWeight) dm.setWeight(weightInfo.map(_.floatValue).toArray)
     }
-    (dm, max)
+    (dm, max, if (isLTR) Seq(firstGroupId, groupId) else Seq.empty)
   }
 
   def buildWatches(cachedDirName: Option[String], gpuId: Int, missing: Float,
       indices: Seq[Array[Int]], iter: Iterator[GpuColumnBatch],
       inferNumClass: Boolean = false): Watches = {
-    val ((dm, numClass), time) = GpuDataset.time("Train: Build DMatrix incrementally") {
+    val ((dm, numClass, groupIDs), time) = GpuDataset.time("Train: Build DMatrix incrementally") {
       buildDMatrixIncrementally(gpuId, missing, indices, iter, inferNumClass)
     }
     logger.debug("Benchmark[Train: Build DMatrix incrementally] " + time)
+    val watchesMetaInfo = WatchesMetaInfo(inferNumClass, numClass, groupIDs)
     if (dm == null) {
-      new Watches(Array.empty, Array.empty, cachedDirName, inferNumClass, numClass)
+      new Watches(Array.empty, Array.empty, cachedDirName, Some(watchesMetaInfo))
     } else {
-      new Watches(Array(dm), Array("train"), cachedDirName, inferNumClass, numClass)
+      new Watches(Array(dm), Array("train"), cachedDirName, Some(watchesMetaInfo))
     }
   }
 
@@ -992,22 +1024,22 @@ private object Watches {
       nameAndGdfColumns: Iterator[(String, Iterator[GpuColumnBatch])],
       inferNumClass: Boolean = false): Watches = {
 
-    var numClass: Double = 0.0
+    var watchesMetaInfo: Option[WatchesMetaInfo] = None
     val dms = nameAndGdfColumns.map {
       case (name, iter) => (name, {
         val inferring = inferNumClass && name == "train"
-        val ((dm, tmpNumClass), time) = GpuDataset.time(s"Train: Build $name DMatrix") {
+        val ((dm, numClass, groupIDs), time) = GpuDataset.time(s"Train: Build $name DMatrix") {
           buildDMatrixIncrementally(gpuId, missing, indices(name), iter, inferring)
         }
         logger.debug(s"Benchmark[Train build $name DMatrix] " + time)
         if (inferring) {
-          numClass = tmpNumClass
+          watchesMetaInfo = Some(WatchesMetaInfo(inferNumClass, numClass, groupIDs))
         }
         dm
       })
     }.filter(_._2 != null).toArray
 
-    new Watches(dms.map(_._2), dms.map(_._1), cachedDirName, inferNumClass, numClass)
+    new Watches(dms.map(_._2), dms.map(_._1), cachedDirName, watchesMetaInfo)
   }
 // ========= GPU Pipeline End =============
 
