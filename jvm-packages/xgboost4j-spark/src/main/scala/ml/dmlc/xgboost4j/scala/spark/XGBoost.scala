@@ -515,11 +515,15 @@ object XGBoost extends Serializable {
     if (isCacheData) {
       logger.warn("Data cache is not support for GpuDataset!")
     }
+    // For LTR, file split is not allowed due to limitations.
+    val splitFile = colNames(3).isEmpty
+    logger.info(s"File split in repartition is" +
+      s" ${if (splitFile) "enabled" else "disabled for LTR"}.")
     (evalSetsMap + (trainName -> trainingData)).map {
       case (name, dataset) =>
         // Always repartition due to not easy to get the current number of
         // partitions from GpuDataset directly, just let GpuDataset handle all the cases.
-        val newDataset = dataset.repartition(nWorkers)
+        val newDataset = dataset.repartition(nWorkers, splitFile)
         // Check and get gdf columns for all GpuDataset(s)
         name -> GDFColumnData(newDataset, checkAndGetGDFColumnIndices(newDataset.schema, colNames))
     }
