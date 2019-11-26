@@ -112,7 +112,9 @@ class GpuDataset(fsRelation: HadoopFsRelation,
   }
 
   /** Return a new GpuDataset that has exactly numPartitions partitions. */
-  def repartition(numPartitions: Int): GpuDataset = {
+  def repartition(numPartitions: Int): GpuDataset = repartition(numPartitions, true)
+
+  def repartition(numPartitions: Int, splitFile: Boolean): GpuDataset = {
     if (numPartitions == partitions.length) {
       return new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
         maxRowsPerChunk, Some(partitions))
@@ -122,6 +124,10 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     var files = partitions.flatMap(fp => GpuDataset.getFiles(fp))
     var permitNumPartitions = numPartitions
     files = if (files.length < numPartitions) {
+      if (!splitFile) {
+        throw new IllegalArgumentException("Requiring more partitions than the number of files" +
+        " is NOT supported when file split is disabled for some cases, such as LTR!")
+      }
       val totalSize = files.map(_.length).sum
       var newPartitionSize = totalSize / numPartitions
       if (newPartitionSize < 1) {
@@ -242,6 +248,9 @@ class GpuDataset(fsRelation: HadoopFsRelation,
   private def getSplits(
       partitions: Seq[PartitionDirectory],
       maxSplitBytes: Long): Seq[PartitionedFile] = {
+    val confSplitFile = fsRelation.sparkSession.conf
+      .get("spark.rapids.splitFile", "true").toBoolean
+    logger.info(s"Config 'spark.rapids.splitFile' is set to $confSplitFile")
     partitions.flatMap { partitionDir =>
       if (partitionDir.files.nonEmpty) {
         // Should be a Hadoop FileStatus, but we have seen people overload this
@@ -253,7 +262,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
             val filePath = file.getPath
             val isSplitable = fsRelation.fileFormat.isSplitable(
               fsRelation.sparkSession, fsRelation.options, filePath) &&
-              fileTypeSupportSplit(sourceType)
+              fileTypeSupportSplit(sourceType) && confSplitFile
             splitFile(
               file = file,
               filePath = filePath,
