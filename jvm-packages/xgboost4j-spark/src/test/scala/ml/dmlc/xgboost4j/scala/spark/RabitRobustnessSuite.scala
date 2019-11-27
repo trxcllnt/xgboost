@@ -226,4 +226,38 @@ class RabitRobustnessSuite extends FunSuite with PerTest {
     // expecting no error
     prediction.collect()
   }
+
+  test("test Rabit broadcast to validate Scala-implemented Rabit tracker") {
+    val vectorLen = 5
+    val mockRow = 1 to vectorLen
+    val mockPartitionData = (1 to numWorkers).flatMap(_ => mockRow)
+    val rdd = sc.parallelize(mockPartitionData, numWorkers).cache()
+    val tracker = new ScalaRabitTracker(numWorkers)
+    tracker.start(0)
+    val trackerEnvs = tracker.getWorkerEnvs
+    val collectedAllReduceResults = new LinkedBlockingDeque[Array[Int]]()
+
+    val broadcastResults = rdd.mapPartitions { _ =>
+      Rabit.init(trackerEnvs)
+      val arr = if (Rabit.getRank == 0) mockRow.toArray else Array(0, 0, 0, 0, 0)
+      val results = Rabit.broadcast(arr, 0)
+      Rabit.shutdown()
+      Iterator(results)
+    }.cache()
+
+    val sparkThread = new Thread() {
+      override def run(): Unit = {
+        broadcastResults.foreachPartition(() => _)
+        val byPartitionResults = broadcastResults.collect()
+        assert(byPartitionResults.length == numWorkers)
+        assert(byPartitionResults(0).length == vectorLen)
+        collectedAllReduceResults.put(byPartitionResults.flatten)
+      }
+    }
+    sparkThread.start()
+    assert(tracker.waitFor(0L) == 0)
+    sparkThread.join()
+
+    assert(collectedAllReduceResults.poll().sameElements(mockPartitionData))
+  }
 }
