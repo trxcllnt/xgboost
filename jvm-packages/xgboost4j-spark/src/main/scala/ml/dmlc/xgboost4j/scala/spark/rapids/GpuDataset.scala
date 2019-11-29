@@ -19,7 +19,7 @@ package ml.dmlc.xgboost4j.scala.spark.rapids
 import java.util.Locale
 import java.nio.charset.StandardCharsets
 
-import ai.rapids.cudf.{DType, Table}
+import ai.rapids.cudf.{DType, Table, TimeUnit}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.{GpuColumnBatch, PartitionReaderFactory}
 import org.apache.commons.logging.LogFactory
@@ -704,14 +704,22 @@ class ColumnBatchToRow() {
     iter
   }
 
+  // features: indices(0) label: indices(1), label may not exist
   class ColumnBatchIter(batch: GpuColumnBatch) extends Iterator[Row] with AutoCloseable {
+    val rawSchema = batch.getSchema
+    val schema = StructType(rawSchema.fields.filter(x =>
+      RowConverter.isSupportingType(x.dataType)))
+
+    // schema name maps to index of schema
+    val nameToIndex = schema.names.map(rawSchema.fieldIndex)
+
+    val nativeColumnPtrs = nameToIndex.map(batch.getColumn)
+    val timeUnits = nameToIndex.map(batch.getColumnVector(_).getTimeUnit)
+
     private val numRows = batch.getNumRows
-    private val schema = batch.getSchema
-    private val timeUnits =
-      (0 until batch.getNumColumns).map(batch.getColumnVector(_).getTimeUnit)
     private val converter = new RowConverter(schema, timeUnits)
-    private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(batch.getNumColumns) +
-      batch.getNumColumns * 8
+    private val rowSize = UnsafeRow.calculateBitSetWidthInBytes(schema.length) +
+      schema.length * 8
     private var buffer: Long = initBuffer()
     private var nextRow = 0
     private val row = new UnsafeRow(schema.length)
@@ -735,10 +743,6 @@ class ColumnBatchToRow() {
     }
 
     private def initBuffer(): Long = {
-      val nativeColumnPtrs = new Array[Long](batch.getNumColumns)
-      for (i <- 0 until batch.getNumColumns) {
-        nativeColumnPtrs(i) = batch.getColumn(i)
-      }
       XGBoostSparkJNI.buildUnsafeRows(nativeColumnPtrs)
     }
   }
