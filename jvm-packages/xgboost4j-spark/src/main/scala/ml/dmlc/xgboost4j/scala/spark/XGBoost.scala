@@ -675,7 +675,7 @@ object XGBoost extends Serializable {
             }
             sparkJobThread.setUncaughtExceptionHandler(tracker)
             sparkJobThread.start()
-            val trackerReturnVal = parallelismTracker.execute(tracker.waitFor(0L))
+            val trackerReturnVal = parallelismTracker.executeHonorForGpu(tracker.waitFor(0L))
             logger.info(s"GpuDataset Rabit returns with exit code $trackerReturnVal")
             val (booster, metrics) = postTrackerReturnProcessing(trackerReturnVal,
               boostersAndMetrics, sparkJobThread)
