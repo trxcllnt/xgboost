@@ -548,7 +548,8 @@ object XGBoost extends Serializable {
     val splitFile = colNames(3).isEmpty
     logger.info(s"File split in repartition is" +
       s" ${if (splitFile) "enabled" else "disabled for LTR"}.")
-    (evalSetsMap + (trainName -> trainingData)).map {
+    // Place train at the first one
+    (Map(trainName -> trainingData) ++ evalSetsMap).map {
       case (name, dataset) =>
         // Always repartition due to not easy to get the current number of
         // partitions from GpuDataset directly, just let GpuDataset handle all the cases.
