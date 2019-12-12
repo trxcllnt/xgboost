@@ -3,7 +3,7 @@
 // -*- mode: groovy -*-
 // Jenkins pipeline
 // See documents at https://jenkins.io/doc/book/pipeline/jenkinsfile/
-@Library('shared-libs') _
+//@Library('shared-libs') _
 
 import groovy.transform.Field
 
