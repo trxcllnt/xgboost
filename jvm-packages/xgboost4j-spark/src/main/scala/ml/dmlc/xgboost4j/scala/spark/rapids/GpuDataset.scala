@@ -386,7 +386,24 @@ class GpuDataset(fsRelation: HadoopFsRelation,
         val remaining = file.getLen - offset
         val size = if (remaining > maxSplitBytes) maxSplitBytes else remaining
         val hosts = getBlockHosts(getBlockLocations(file), offset, size)
-        PartitionedFile(partitionValues, filePath.toUri.toString, offset, size, hosts)
+        try{
+          PartitionedFile(partitionValues, filePath.toUri.toString, offset, size, hosts)
+        } catch {
+          case e: NoSuchMethodError =>
+            logger.debug("PartitionedFile, normal Apache Spark version failed.")
+            // assume this is the EMR 5.28 version
+            // scalastyle:off classforname
+            val clzFileData = Class.forName("org.apache.spark.sql.execution.datasources.FileData")
+            // scalastyle:on classforname
+            val pfClass = org.apache.spark.sql.execution.datasources.PartitionedFile.getClass.
+              getMethod("apply", classOf[org.apache.spark.sql.catalyst.InternalRow],
+                classOf[String], classOf[Long], classOf[Long], classOf[Array[String]],
+                clzFileData)
+            pfClass.invoke(org.apache.spark.sql.execution.datasources.PartitionedFile,
+              partitionValues, filePath.toUri.toString, java.lang.Long.valueOf(offset),
+              java.lang.Long.valueOf(size), hosts, null).
+              asInstanceOf[PartitionedFile]
+        }
       }
     } else {
       Seq(getPartitionedFile(file, filePath, partitionValues))
