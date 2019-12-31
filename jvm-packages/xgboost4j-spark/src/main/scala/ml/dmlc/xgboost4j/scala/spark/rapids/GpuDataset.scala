@@ -728,7 +728,7 @@ class ColumnBatchToRow() {
       RowConverter.isSupportingType(x.dataType)))
 
     // schema name maps to index of schema
-    val nameToIndex = schema.names.map(rawSchema.fieldIndex)
+    val nameToIndex = schema.fieldNames.map(rawSchema.fieldIndex)
 
     val nativeColumnPtrs = nameToIndex.map(batch.getColumn)
     val timeUnits = nameToIndex.map(batch.getColumnVector(_).getTimeUnit)
