@@ -258,7 +258,7 @@ def _extract_interface_from_cudf_series(data):
     should be upstreamed to cudf.
     """
     interface = data.__cuda_array_interface__
-    if data.has_null_mask:
+    if 'mask' in interface:
         interface['mask'] = interface['mask'].__cuda_array_interface__
     return interface
 
