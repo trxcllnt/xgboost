@@ -290,12 +290,18 @@ class XGBoostRegressionModel private[ml] (
     0.0f
   }
 
-  private def transformInternal(dataset: GpuDataset): DataFrame = {
+  private def transformInternal(dataset: GpuDataset, colNameToBuild: Option[String] = None):
+      DataFrame = {
     val rawSchema = dataset.schema
 
     // dataReadSchema filters out some fields that RowConverter is not supporting
-    val dataReadSchema = StructType(rawSchema.fields.filter(x =>
-      RowConverter.isSupportingType(x.dataType)))
+    val dataReadSchema = colNameToBuild.map(name => StructType(rawSchema.fields.filter(x =>
+        RowConverter.isSupportingType(x.dataType) && x.name.equals(name))))
+      .getOrElse(StructType(rawSchema.fields.filter(x =>
+          RowConverter.isSupportingType(x.dataType))))
+
+    colNameToBuild.map(name => require(dataReadSchema.nonEmpty, s"Schema didn't include " +
+      s"${name} column to build! "))
 
     val schema = StructType(dataReadSchema.fields ++
       Seq(StructField(name = _originalPredictionCol, dataType =
@@ -330,7 +336,7 @@ class XGBoostRegressionModel private[ml] (
       }
 
       val ((dm, columnBatchToRow), time) = GpuDataset.time("Transform: build dmatrix and row") {
-        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter)
+        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter, colNameToBuild)
       }
       logger.debug("Benchmark [Transform: Build Dmatrix and Row] " + time)
 
@@ -488,10 +494,17 @@ class XGBoostRegressionModel private[ml] (
     Array(originalPredictionItr, predLeafItr, predContribItr)
   }
 
-  def transform(dataset: GpuDataset): DataFrame = {
+  /**
+   *
+   * @param dataset GpuDataset
+   * @param colNameToBuild if defined, builds its column or else builds all columns
+   * @return
+   */
+  private[spark] def transformWithColumn(dataset: GpuDataset,
+      colNameToBuild: Option[String] = None): DataFrame = {
     // Output selected columns only.
     // This is a bit complicated since it tries to avoid repeated computation.
-    var outputData = transformInternal(dataset)
+    var outputData = transformInternal(dataset, colNameToBuild)
     var numColsOutput = 0
 
     val predictUDF = udf { (originalPrediction: mutable.WrappedArray[Float]) =>
@@ -509,6 +522,10 @@ class XGBoostRegressionModel private[ml] (
         " since no output columns were set.")
     }
     outputData.toDF.drop(col(_originalPredictionCol))
+  }
+
+  def transform(dataset: GpuDataset): DataFrame = {
+    transformWithColumn(dataset)
   }
 
   override def transform(dataset: Dataset[_]): DataFrame = {
