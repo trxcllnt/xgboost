@@ -321,12 +321,18 @@ class XGBoostClassificationModel private[ml](
     0.0f
   }
 
-  private def transformInternal(dataset: GpuDataset): DataFrame = {
+  private def transformInternal(dataset: GpuDataset, colNameToBuild: Option[String] = None):
+      DataFrame = {
     val rawSchema = dataset.schema
 
     // dataReadSchema filters out some fields that RowConverter is not supporting
-    val dataReadSchema = StructType(rawSchema.fields.filter(x =>
-      RowConverter.isSupportingType(x.dataType)))
+    val dataReadSchema = colNameToBuild.map(name => StructType(rawSchema.fields.filter(x =>
+      RowConverter.isSupportingType(x.dataType) && x.name.equals(name))))
+      .getOrElse(StructType(rawSchema.fields.filter(x =>
+        RowConverter.isSupportingType(x.dataType))))
+
+    colNameToBuild.map(name => require(dataReadSchema.nonEmpty, s"Schema didn't include " +
+      s"${name} column to build! "))
 
     val schema = StructType(dataReadSchema.fields ++
       Seq(StructField(name = _rawPredictionCol, dataType =
@@ -363,7 +369,7 @@ class XGBoostClassificationModel private[ml](
       }
 
       val ((dm, columnBatchToRow), time) = GpuDataset.time("Transform: build dmatrix and row") {
-        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter)
+        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter, colNameToBuild)
       }
       logger.debug("Benchmark [Transform: Build Dmatrix and Row] " + time)
 
@@ -533,7 +539,19 @@ class XGBoostClassificationModel private[ml](
     Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
   }
 
+
   def transform(dataset: GpuDataset): DataFrame = {
+    transformWithColumn(dataset)
+  }
+
+  /**
+   *
+   * @param dataset GpuDataset
+   * @param colNameToBuild if defined, builds its column or else builds all columns
+   * @return
+   */
+  private[spark] def transformWithColumn(dataset: GpuDataset,
+      colNameToBuild: Option[String] = None): DataFrame = {
     // transformSchema(dataset.schema, logging = true)
     if (isDefined(thresholds)) {
       require($(thresholds).length == numClasses, this.getClass.getSimpleName +
@@ -543,7 +561,7 @@ class XGBoostClassificationModel private[ml](
 
     // Output selected columns only.
     // This is a bit complicated since it tries to avoid repeated computation.
-    var outputData = transformInternal(dataset)
+    var outputData = transformInternal(dataset, colNameToBuild)
     var numColsOutput = 0
 
     val rawPredictionUDF = udf { rawPrediction: mutable.WrappedArray[Float] =>

@@ -23,6 +23,8 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.scalactic.TolerantNumerics
 import org.scalatest.FunSuite
+import org.apache.spark.util.Utils
+import org.apache.spark.util.random.BernoulliCellSampler
 
 class GpuDatasetSuite extends FunSuite with PerTest {
   private lazy val TRAIN_CSV_PATH = getTestDataPath("/rank.train.csv")
@@ -42,6 +44,92 @@ class GpuDatasetSuite extends FunSuite with PerTest {
     val dataset = reader.schema(csvSchema).csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
     val v = dataset.findNumClasses("e")
     assertResult(21) { v }
+  }
+
+  test("GpuDataset sampling") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
+    val dataset = reader
+      .option("asFloats", "false")
+      .schema(csvSchema)
+      .csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+
+    val sampler = GpuSampler(0.3, 0.6, 1000, true)
+    val newDs = dataset.sampling(Some(sampler))
+
+    val rdd = newDs.buildRDD.mapPartitions((iter: Iterator[GpuColumnBatch]) => {
+      if (iter.hasNext) {
+        val batch = iter.next()
+        if (batch.getSampler == null) {
+          Iterator.empty
+        } else Iterator.single(batch.getSampler)
+      } else {
+        Iterator.empty
+      }
+    })
+
+    val result = rdd.collect
+    assertResult(1) { result.length }
+    assert(result.head.lb === 0.3)
+    assert(result.head.ub === 0.6)
+    assert(result.head.seed === 1000)
+    assertResult(true) {result.head.complement}
+  }
+
+  test("GpuDataset without sampling") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
+    val dataset = reader
+      .option("asFloats", "false")
+      .schema(csvSchema)
+      .csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+
+    val rdd = dataset.buildRDD.mapPartitions((iter: Iterator[GpuColumnBatch]) => {
+      if (iter.hasNext) {
+        val batch = iter.next()
+        if (batch.getSampler == null) {
+          Iterator.empty
+        } else Iterator.single(batch.getSampler)
+      } else {
+        Iterator.empty
+      }
+    })
+
+    val result = rdd.collect
+    assertResult(0) { result.length }
+  }
+
+  test("GpuDataset sampling repartition") {
+    assume(Cuda.isEnvCompatibleForTesting)
+    val reader = new GpuDataReader(ss)
+    val csvSchema = "a BOOLEAN, b DOUBLE, c DOUBLE, d DOUBLE, e INT"
+    val dataset = reader
+      .option("asFloats", "false")
+      .schema(csvSchema)
+      .csv(TRAIN_CSV_PATH, TEST_CSV_PATH)
+
+    val sampler = GpuSampler(0.3, 0.6, 1000, true)
+    val newDs = dataset.sampling(Some(sampler))
+
+    val rdd = newDs.buildRDD.mapPartitions((iter: Iterator[GpuColumnBatch]) => {
+      if (iter.hasNext) {
+        val batch = iter.next()
+        if (batch.getSampler == null) {
+          Iterator.empty
+        } else Iterator.single(batch.getSampler)
+      } else {
+        Iterator.empty
+      }
+    }).repartition(3)
+
+    val result = rdd.collect
+    assertResult(1) { result.length }
+    assert(result.head.lb === 0.3)
+    assert(result.head.ub === 0.6)
+    assert(result.head.seed === 1000)
+    assertResult(true) {result.head.complement}
   }
 
   test("ColumnToRow") {

@@ -107,13 +107,15 @@ object DataUtils extends Serializable {
   }
 
   private[spark] def buildDMatrixIncrementally(gpuId: Int, missing: Float,
-      indices: Seq[Array[Int]], iter: Iterator[GpuColumnBatch]): (DMatrix, ColumnBatchToRow) = {
+      indices: Seq[Array[Int]], iter: Iterator[GpuColumnBatch],
+      colNameToBuild: Option[String] = None): (DMatrix, ColumnBatchToRow) = {
     var dm: DMatrix = null
     var isFirstBatch = true
     val columnBatchToRow: ColumnBatchToRow = new ColumnBatchToRow
 
     while (iter.hasNext) {
       val columnBatch = iter.next()
+      columnBatch.samplingTable()
       val gdfColsHandles = indices.map(_.map(columnBatch.getColumn))
 
       if (isFirstBatch) {
@@ -123,7 +125,8 @@ object DataUtils extends Serializable {
         dm.appendCUDF(gdfColsHandles(0))
       }
 
-       columnBatchToRow.appendColumnBatch(columnBatch)
+      columnBatchToRow.appendColumnBatch(columnBatch, colNameToBuild)
+      columnBatch.samplingClose()
     }
     if (dm == null) {
       // here we allow empty iter

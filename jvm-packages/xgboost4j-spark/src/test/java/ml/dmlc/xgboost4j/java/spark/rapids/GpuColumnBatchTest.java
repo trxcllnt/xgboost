@@ -17,12 +17,17 @@
 package ml.dmlc.xgboost4j.java.spark.rapids;
 
 import ai.rapids.cudf.*;
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuSampler;
+
 import org.apache.spark.sql.types.StructType;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.ArrayList;
 
@@ -44,6 +49,10 @@ public class GpuColumnBatchTest {
           .ofNullable(this.getClass().getResource("/rank-weight2.csv"))
           .orElseThrow(() -> new RuntimeException("Resource rank-weight2.csv does not exist"))
           .getPath();
+  private final String TEST_CSV_PATH3 = Optional
+          .ofNullable(this.getClass().getResource("/sampling.csv"))
+          .orElseThrow(() -> new RuntimeException("Resource sampling.csv does not exist"))
+          .getPath();
 
   // Schemas for spark and cuDF
   private final Schema CUDF_SCHEMA = Schema.builder()
@@ -61,6 +70,16 @@ public class GpuColumnBatchTest {
           .add("c", FloatType)
           .add("group", IntegerType)
           .add("weight", FloatType);
+
+  private final Schema CUDF_SAMPLING_CSV_SCHEMA = Schema.builder()
+          .column(DType.INT32, "c1")
+          .column(DType.INT32, "c2")
+
+          .build();
+
+  private final StructType SAMPLING_CSV_SCHEMA = new StructType()
+          .add("c1", IntegerType)
+          .add("c2", IntegerType);
 
   private Table mTestTable;
 
@@ -138,5 +157,73 @@ public class GpuColumnBatchTest {
     assertEquals(13, groupId);
     assertEquals(0, weightInfo.size());
     table2.close();
+  }
+
+  @Test
+  public void samplingTable() {
+    // suppose kFold = 3
+    float numFold = 3;
+    long seed = 12306;
+    List resultList = new ArrayList();
+    List anchors = Arrays.asList(1, 3, 5, 7, 9, 11, 13, 15);
+    for (float i = 0; i < numFold ; i++) {
+      Table table = Table.readCSV(CUDF_SAMPLING_CSV_SCHEMA, Paths.get(TEST_CSV_PATH3).toFile());
+      GpuColumnBatch gcb = new GpuColumnBatch(table, SAMPLING_CSV_SCHEMA);
+      float lb = i / numFold;
+      float ub = (i + 1) / numFold;
+      GpuSampler gs = new GpuSampler(lb, ub, seed, false);
+      gcb.setSampler(gs);
+      gcb.samplingTable();
+      ColumnVector cv = gcb.getColumnVectorInitHost(0);
+
+      for (int j = 0; j < cv.getRowCount(); j++) {
+        resultList.add(cv.getInt(j));
+      }
+      gcb.samplingClose();
+    }
+    assertEquals(anchors.size(), resultList.size());
+    Collections.sort(resultList);
+    Collections.sort(anchors);
+    assertTrue(anchors.equals(resultList));
+  }
+
+  @Test
+  public void samplingTableCombination() {
+    // suppose kFold = 3
+    float numFold = 3;
+    long seed = 12306;
+    List resultList = new ArrayList();
+    List anchors = Arrays.asList(1, 3, 5, 7, 9, 11, 13, 15);
+    for (float i = 0; i < numFold ; i++) {
+      Table table = Table.readCSV(CUDF_SAMPLING_CSV_SCHEMA, Paths.get(TEST_CSV_PATH3).toFile());
+      GpuColumnBatch gcb = new GpuColumnBatch(table, SAMPLING_CSV_SCHEMA);
+      float lb = i / numFold;
+      float ub = (i + 1) / numFold;
+      GpuSampler gs = new GpuSampler(lb, ub, seed, false);
+      gcb.setSampler(gs);
+      gcb.samplingTable();
+      ColumnVector cv = gcb.getColumnVectorInitHost(0);
+      resultList.clear();
+      for (int j = 0; j < cv.getRowCount(); j++) {
+        resultList.add(cv.getInt(j));
+      }
+      gcb.samplingClose();
+
+      Table table1 = Table.readCSV(CUDF_SAMPLING_CSV_SCHEMA, Paths.get(TEST_CSV_PATH3).toFile());
+      GpuColumnBatch gcb1 = new GpuColumnBatch(table1, SAMPLING_CSV_SCHEMA);
+      GpuSampler gs1 = new GpuSampler(lb, ub, seed, true);
+      gcb1.setSampler(gs1);
+      gcb1.samplingTable();
+      ColumnVector cv1 = gcb1.getColumnVectorInitHost(0);
+      for (int j = 0; j < cv1.getRowCount(); j++) {
+        resultList.add(cv1.getInt(j));
+      }
+      gcb1.samplingClose();
+
+      assertEquals(anchors.size(), resultList.size());
+      Collections.sort(resultList);
+      Collections.sort(anchors);
+      assertTrue(anchors.equals(resultList));
+    }
   }
 }

@@ -953,6 +953,7 @@ private object Watches {
     var max: Double = Double.MinValue
     while (iter.hasNext) {
       val columnBatch = iter.next()
+      columnBatch.samplingTable()
       if (isLTR) {
         if (isFirstBunch) firstGroupId = columnBatch.getIntInColumn(0, groupIndices(0), 0)
         // Build group info, along with weight info if needed (-1 means no weight)
@@ -994,6 +995,7 @@ private object Watches {
           }
         })
       }
+      columnBatch.samplingClose()
     }
     logger.debug("Num class: " + max)
     if (dm != null && isLTR) {
