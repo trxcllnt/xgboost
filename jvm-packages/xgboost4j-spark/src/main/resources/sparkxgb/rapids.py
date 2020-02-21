@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 import json
-import pyspark
+import pyspark.ml.tuning
 
 from pyspark.ml.wrapper import JavaWrapper
 from pyspark.ml.util import _jvm
