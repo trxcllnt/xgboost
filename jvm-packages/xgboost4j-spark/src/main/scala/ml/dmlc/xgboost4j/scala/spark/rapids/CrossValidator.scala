@@ -19,6 +19,7 @@ package ml.dmlc.xgboost4j.scala.spark.rapids
 import java.util.concurrent.{LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit, TimeoutException}
 
 import com.google.common.util.concurrent.{MoreExecutors, ThreadFactoryBuilder}
+import ml.dmlc.xgboost4j.scala.spark.params.JasonWrapper._
 import ml.dmlc.xgboost4j.scala.spark.{XGBoostClassificationModel, XGBoostClassifier, XGBoostRegressionModel, XGBoostRegressor}
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
@@ -28,7 +29,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Dataset
 import org.json4s.JValue
 import org.json4s.JsonDSL.map2jvalue
-import org.json4s.jackson.JsonMethods.{compact, parse, render}
+import org.json4s.jackson.JsonMethods.{compact, render}
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Awaitable, ExecutionContext, Future}
