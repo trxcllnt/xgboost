@@ -25,13 +25,52 @@ import ai.rapids.cudf.Table;
 
 import org.apache.spark.sql.types.*;
 
+import org.apache.spark.util.random.BernoulliCellSampler;
+
+import ml.dmlc.xgboost4j.scala.spark.rapids.GpuSampler;
+
 public class GpuColumnBatch {
-  private final Table table;
+  private Table table;
   private final StructType schema;
+  private GpuSampler sampler;
 
   public GpuColumnBatch(Table table, StructType schema) {
     this.table = table;
     this.schema = schema;
+  }
+
+  public void setSampler(GpuSampler sampler) {
+    this.sampler = sampler;
+  }
+
+  public GpuSampler getSampler() {
+    return sampler;
+  }
+
+  public void samplingTable() {
+    if (sampler != null) {
+      BernoulliCellSampler bcs = new BernoulliCellSampler(
+          sampler.lb(), sampler.ub(), sampler.complement());
+      bcs.setSeed(sampler.seed());
+      Long num_rows = getNumRows();
+      byte[] maskVals = new byte[num_rows.intValue()];
+      for (int i = 0; i < num_rows.intValue(); i++) {
+        maskVals[i] = (byte) bcs.sample();
+      }
+      ColumnVector mask = ColumnVector.boolFromBytes(maskVals);
+      Table filteredTable = table.filter(mask);
+      mask.close();
+      table.close();
+      table = filteredTable;
+    }
+  }
+
+  public void samplingClose() {
+    // In case of sampling, we have replaced table with filtered table,
+    // so we must manually free filtered table
+    if (sampler != null) {
+      table.close();
+    }
   }
 
   public StructType getSchema() {

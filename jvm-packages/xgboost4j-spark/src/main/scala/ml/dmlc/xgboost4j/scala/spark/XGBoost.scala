@@ -161,6 +161,7 @@ object XGBoost extends Serializable {
     rabitEnv.put("DMLC_TASK_ID", taskId)
     rabitEnv.put("DMLC_WORKER_STOP_PROCESS_ON_ERROR", "false")
 
+    val taskContext = TaskContext.get
     try {
       Rabit.init(rabitEnv)
       // to workaround the empty partitions in training dataset,
@@ -234,6 +235,17 @@ object XGBoost extends Serializable {
 
       val booster = SXGBoost.train(dmMap(trainName), overridedParams, round, dmMap,
           metrics, obj, eval, earlyStoppingRound = numEarlyStoppingRounds, prevBooster)
+      if (overridedParams.contains("tree_method") &&
+        overridedParams("tree_method").toString == "gpu_hist") {
+        taskContext.addTaskCompletionListener(_ => {
+          // Booster holds a pointer to native gpu memory. if Booster is not disposed.
+          // then GPU memory will leak. From upstream. Booster's finalize (dispose) depends
+          // on JVM GC. GC is not triggered freqently, which means gpu memory already leaks.
+          // The fix is to force GC.
+          System.gc()
+          System.runFinalization()
+        })
+      }
       Iterator(booster -> watches.toMap.keys.zip(metrics).toMap)
     } catch {
       case xgbException: XGBoostError =>
@@ -953,6 +965,7 @@ private object Watches {
     var max: Double = Double.MinValue
     while (iter.hasNext) {
       val columnBatch = iter.next()
+      columnBatch.samplingTable()
       if (isLTR) {
         if (isFirstBunch) firstGroupId = columnBatch.getIntInColumn(0, groupIndices(0), 0)
         // Build group info, along with weight info if needed (-1 means no weight)
@@ -994,6 +1007,7 @@ private object Watches {
           }
         })
       }
+      columnBatch.samplingClose()
     }
     logger.debug("Num class: " + max)
     if (dm != null && isLTR) {
