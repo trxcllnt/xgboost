@@ -14,10 +14,29 @@
 # limitations under the License.
 #
 import json
+import pyspark.ml.tuning
 
 from pyspark.ml.wrapper import JavaWrapper
 from pyspark.ml.util import _jvm
+from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
+
+class CrossValidator(JavaWrapper, pyspark.ml.tuning.CrossValidator):
+
+    def __init__(self):
+        super(CrossValidator, self).__init__()
+        self._java_obj = self._new_java_obj(
+            'ml.dmlc.xgboost4j.scala.spark.rapids.CrossValidator')
+
+    def fit(self, dataset):
+        java_estimator, java_epms, java_evaluator = self._to_java_impl()
+        self._java_obj.setEstimator(java_estimator)
+        self._java_obj.setEvaluator(java_evaluator)
+        self._java_obj.setEstimatorParamMaps(java_epms)
+
+        dataset = dataset._jdf if isinstance(dataset, DataFrame) else dataset._java_obj
+        java_model = self._java_obj.fit(dataset)
+        return self.getEstimator()._create_model(java_model)
 
 class GpuDataset(JavaWrapper):
     # Note: SparkSession.getActiveSession() could be used in Spark 3.x

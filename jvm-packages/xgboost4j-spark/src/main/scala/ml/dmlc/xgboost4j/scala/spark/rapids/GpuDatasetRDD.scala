@@ -31,7 +31,8 @@ private[spark] class GpuDatasetRDD(
     broadcastedConf: Broadcast[SerializableWritable[Configuration]],
     partitionReaderFactory: PartitionReaderFactory,
     @transient val filePartitions: Seq[FilePartition],
-    schema: StructType)
+    schema: StructType,
+    sampler: Option[GpuSampler])
   extends RDD[GpuColumnBatch](sparkSession.sparkContext, Nil) {
 
   private val logger = LogFactory.getLog(classOf[GpuDatasetRDD])
@@ -51,7 +52,9 @@ private[spark] class GpuDatasetRDD(
       }
 
       override def next(): GpuColumnBatch = {
-        reader.get()
+        val batch = reader.get()
+        sampler.map(x => batch.setSampler(x))
+        batch
       }
 
       override def close(): Unit = {

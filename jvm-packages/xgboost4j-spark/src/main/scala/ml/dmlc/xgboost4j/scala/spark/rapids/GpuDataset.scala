@@ -17,9 +17,7 @@
 package ml.dmlc.xgboost4j.scala.spark.rapids
 
 import java.util.Locale
-import java.nio.charset.StandardCharsets
 
-import ai.rapids.cudf.{DType, Table, TimeUnit}
 import ml.dmlc.xgboost4j.java.XGBoostSparkJNI
 import ml.dmlc.xgboost4j.java.spark.rapids.{GpuColumnBatch, PartitionReaderFactory}
 import org.apache.commons.logging.LogFactory
@@ -68,14 +66,36 @@ import scala.reflect.ClassTag
  *       filePath: String, start: Long, length: Long, locations: Seq[String])
  */
 
+/*
+ * @param lb lower bound of the acceptance range
+ * @param ub upper bound of the acceptance range
+ * @param seed
+ * @param complement whether to use the complement of the range specified, default to false
+ */
+case class GpuSampler(lb: Double, ub: Double, seed: Long, complement: Boolean = false) {
+  val roundingEpsilon = 1e-6
+  /** epsilon slop to avoid failure from floating point jitter. */
+  require(
+    lb <= (ub + roundingEpsilon),
+    s"Lower bound ($lb) must be <= upper bound ($ub)")
+  require(
+    lb >= (0.0 - roundingEpsilon),
+    s"Lower bound ($lb) must be >= 0.0")
+  require(
+    ub <= (1.0 + roundingEpsilon),
+    s"Upper bound ($ub) must be <= 1.0")
+}
+
 class GpuDataset(fsRelation: HadoopFsRelation,
     sourceType: String,
     sourceOptions: Map[String, String],
     castAllToFloats: Boolean,
     maxRowsPerChunk: Integer,
-    specifiedPartitions: Option[Seq[FilePartition]] = None) {
+    specifiedPartitions: Option[Seq[FilePartition]] = None,
+    sampler: Option[GpuSampler] = None) {
 
   private val logger = LogFactory.getLog(classOf[GpuDataset])
+
 
   /** Returns the schema of the data. */
   def schema: StructType = {
@@ -99,7 +119,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     val partitionReader = GpuDataset.getPartFileReader(fsRelation.sparkSession, broadcastedConf,
       sourceType, fsRelation.schema, sourceOptions, castAllToFloats, schema, maxRowsPerChunk)
     new GpuDatasetRDD(fsRelation.sparkSession, broadcastedConf, partitionReader,
-      partitions, schema)
+      partitions, schema, sampler)
   }
 
   /**
@@ -111,13 +131,22 @@ class GpuDataset(fsRelation: HadoopFsRelation,
     buildRDD.mapPartitions(GpuDataset.getBatchMapper(func))
   }
 
+  def sampling(lb: Double, ub: Double, seed: Long, complement: Boolean): GpuDataset = {
+    sampling(Some(GpuSampler(lb, ub, seed, complement)))
+  }
+
+  def sampling(sampler: Option[GpuSampler]): GpuDataset = {
+    new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
+      maxRowsPerChunk, specifiedPartitions, sampler)
+  }
+
   /** Return a new GpuDataset that has exactly numPartitions partitions. */
   def repartition(numPartitions: Int): GpuDataset = repartition(numPartitions, true)
 
   def repartition(numPartitions: Int, splitFile: Boolean): GpuDataset = {
     if (numPartitions == partitions.length) {
       return new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
-        maxRowsPerChunk, Some(partitions))
+        maxRowsPerChunk, Some(partitions), sampler)
     }
 
     // build a list of all input files sorted from largest to smallest
@@ -163,7 +192,7 @@ class GpuDataset(fsRelation: HadoopFsRelation,
 
     val newPartitions = buckets.zipWithIndex.map{case (b, i) => b.toFilePartition(i)}
     new GpuDataset(fsRelation, sourceType, sourceOptions, castAllToFloats,
-      maxRowsPerChunk, Some(newPartitions))
+      maxRowsPerChunk, Some(newPartitions), sampler)
   }
 
   /**
@@ -683,8 +712,8 @@ class ColumnBatchToRow() {
   private lazy val batchIter = batches.toIterator
   private var currentBatchIter: ColumnBatchIter = null
 
-  def appendColumnBatch(batch: GpuColumnBatch): Unit = {
-    batches = batches :+ new ColumnBatchIter(batch)
+  def appendColumnBatch(batch: GpuColumnBatch, colNameToBuild: Option[String] = None): Unit = {
+    batches = batches :+ new ColumnBatchIter(batch, colNameToBuild)
   }
 
   private[xgboost4j] def toIterator: Iterator[Row] = {
@@ -722,10 +751,13 @@ class ColumnBatchToRow() {
   }
 
   // features: indices(0) label: indices(1), label may not exist
-  class ColumnBatchIter(batch: GpuColumnBatch) extends Iterator[Row] with AutoCloseable {
+  class ColumnBatchIter(batch: GpuColumnBatch, colNameToBuild: Option[String] = None)
+      extends Iterator[Row] with AutoCloseable {
     val rawSchema = batch.getSchema
-    val schema = StructType(rawSchema.fields.filter(x =>
-      RowConverter.isSupportingType(x.dataType)))
+    val schema = colNameToBuild.map(name => StructType(rawSchema.fields.filter(x =>
+        RowConverter.isSupportingType(x.dataType) && x.name.equals(name))))
+      .getOrElse(StructType(
+        rawSchema.fields.filter(x => RowConverter.isSupportingType(x.dataType))))
 
     // schema name maps to index of schema
     val nameToIndex = schema.fieldNames.map(rawSchema.fieldIndex)
