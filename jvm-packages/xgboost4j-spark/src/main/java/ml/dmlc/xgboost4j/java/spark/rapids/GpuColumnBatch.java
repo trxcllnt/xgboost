@@ -19,15 +19,11 @@ package ml.dmlc.xgboost4j.java.spark.rapids;
 import java.util.List;
 
 import ai.rapids.cudf.ColumnVector;
-
 import ai.rapids.cudf.DType;
+import ai.rapids.cudf.HostColumnVector;
 import ai.rapids.cudf.Table;
 
 import org.apache.spark.sql.types.*;
-
-import org.apache.spark.util.random.BernoulliCellSampler;
-
-import ml.dmlc.xgboost4j.scala.spark.rapids.GpuSampler;
 
 public class GpuColumnBatch {
   private Table table;
@@ -37,40 +33,6 @@ public class GpuColumnBatch {
   public GpuColumnBatch(Table table, StructType schema) {
     this.table = table;
     this.schema = schema;
-  }
-
-  public void setSampler(GpuSampler sampler) {
-    this.sampler = sampler;
-  }
-
-  public GpuSampler getSampler() {
-    return sampler;
-  }
-
-  public void samplingTable() {
-    if (sampler != null) {
-      BernoulliCellSampler bcs = new BernoulliCellSampler(
-          sampler.lb(), sampler.ub(), sampler.complement());
-      bcs.setSeed(sampler.seed());
-      Long num_rows = getNumRows();
-      byte[] maskVals = new byte[num_rows.intValue()];
-      for (int i = 0; i < num_rows.intValue(); i++) {
-        maskVals[i] = (byte) bcs.sample();
-      }
-      ColumnVector mask = ColumnVector.boolFromBytes(maskVals);
-      Table filteredTable = table.filter(mask);
-      mask.close();
-      table.close();
-      table = filteredTable;
-    }
-  }
-
-  public void samplingClose() {
-    // In case of sampling, we have replaced table with filtered table,
-    // so we must manually free filtered table
-    if (sampler != null) {
-      table.close();
-    }
   }
 
   public StructType getSchema() {
@@ -91,41 +53,43 @@ public class GpuColumnBatch {
 
   public long getColumn(int index) {
     ColumnVector v = table.getColumn(index);
-    return v.getNativeCudfColumnAddress();
+    return v.getNativeView();
   }
 
-  public ColumnVector getColumnVectorInitHost(int index) {
+  public HostColumnVector getColumnVectorInitHost(int index) {
     ColumnVector cv = table.getColumn(index);
-    cv.ensureOnHost();
-    return cv;
+    return cv.copyToHost();
   }
 
-  private double getNumericValueInColumn(int dataIndex, ColumnVector cv, StructField field) {
-    DataType type = field.dataType();
+  public void close() {
+    table.close();
+  }
+
+  private static double getNumericValueInColumn(int dataIndex, HostColumnVector hcv) {
+    DType type = hcv.getType();
     double value;
-    if (type instanceof FloatType) {
-      value = cv.getFloat(dataIndex);
-    } else if (type instanceof IntegerType) {
-      value = cv.getInt(dataIndex);
-    } else if (type instanceof ByteType) {
-      value = cv.getByte(dataIndex);
-    } else if (type instanceof ShortType) {
-      value = cv.getShort(dataIndex);
-    } else if (type instanceof DoubleType) {
-      value = cv.getDouble(dataIndex);
-    } else if (type instanceof LongType) {
-      value = cv.getLong(dataIndex);
+    if (type == DType.FLOAT32) {
+      value = hcv.getFloat(dataIndex);
+    } else if (type == DType.INT32) {
+      value = hcv.getInt(dataIndex);
+    } else if (type == DType.INT8) {
+      value = hcv.getByte(dataIndex);
+    } else if (type == DType.INT16) {
+      value = hcv.getShort(dataIndex);
+    } else if (type == DType.FLOAT64) {
+      value = hcv.getDouble(dataIndex);
+    } else if (type == DType.INT64) {
+      value = hcv.getLong(dataIndex);
     } else {
-      throw new IllegalArgumentException("Not a numeric type in column: " + field.name());
+      throw new IllegalArgumentException("Not a numeric type");
     }
     return value;
   }
 
   private double getNumericValueInColumn(int dataIndex, int colIndex, double defVal) {
-    ColumnVector cv = getColumnVector(colIndex);
-    cv.ensureOnHost();
-    return cv.getRowCount() > 0 ?
-            getNumericValueInColumn(dataIndex, cv, getSchema().apply(colIndex)) :
+    HostColumnVector hcv = getColumnVectorInitHost(colIndex);
+    return hcv.getRowCount() > 0 ?
+            getNumericValueInColumn(dataIndex, hcv) :
             defVal;
   }
 
@@ -152,23 +116,21 @@ public class GpuColumnBatch {
       List<Integer> groupInfo, List<Float> weightInfo) {
     // Weight: Initialize info if having weight column
     final boolean hasWeight = weightIdx >= 0;
-    ColumnVector aggrCV = null;
+    HostColumnVector aggrCV = null;
     Float curWeight = null;
     if (hasWeight) {
       aggrCV = getColumnVectorInitHost(weightIdx);
       Float firstWeight = aggrCV.getRowCount() > 0 ?
-              (float)getNumericValueInColumn(0, aggrCV, getSchema().apply(weightIdx)) : null;
+              (float)getNumericValueInColumn(0, aggrCV) : null;
       curWeight = weightInfo.isEmpty() ? firstWeight : weightInfo.get(weightInfo.size() - 1);
     }
     // Initialize group info
-    ColumnVector groupCV = getColumnVectorInitHost(groupIdx);
-    StructField groupSF = getSchema().apply(groupIdx);
+    HostColumnVector groupCV = getColumnVectorInitHost(groupIdx);
     int groupId = prevTailGid;
     int groupSize = groupInfo.isEmpty() ? 0 : groupInfo.get(groupInfo.size() - 1);
     for (int i = 0; i < groupCV.getRowCount(); i ++) {
-      Float weight = hasWeight ?
-              (float)getNumericValueInColumn(i, aggrCV, getSchema().apply(weightIdx)) : 0;
-      int gid = (int)getNumericValueInColumn(i, groupCV, groupSF);
+      Float weight = hasWeight ? (float)getNumericValueInColumn(i, aggrCV) : 0;
+      int gid = (int)getNumericValueInColumn(i, groupCV);
       if(gid == groupId) {
         // The same group
         groupSize ++;
@@ -239,9 +201,9 @@ public class GpuColumnBatch {
     } else if (type instanceof FloatType) {
       return DType.FLOAT32;
     } else if (type instanceof DateType) {
-      return DType.DATE32;
+      return DType.TIMESTAMP_DAYS;
     } else if (type instanceof TimestampType) {
-      return DType.TIMESTAMP;
+      return DType.TIMESTAMP_MICROSECONDS;
     } else if (type instanceof StringType) {
       return DType.STRING; // TODO what do we want to do about STRING_CATEGORY???
     }

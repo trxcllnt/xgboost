@@ -69,16 +69,11 @@ class SparkParallelismTracker(
   private[this] def numAliveWorkers: Int = {
     try {
       if (url != null) {
-        // Regular expression used for local[N] and local[*] master formats
-        val LOCAL_N_REGEX = """local\[([0-9]+|\*)\]""".r
-        // Regular expression for local[N, maxRetries], used in tests with failing tasks
-        val LOCAL_N_FAILURES_REGEX = """local\[([0-9]+|\*)\s*,\s*([0-9]+)\]""".r
-        sc.master match {
-          case "local" | LOCAL_N_REGEX(_) | LOCAL_N_FAILURES_REGEX(_, _) =>
-            mapper.readTree(url).findValues("id").asScala.map(_.asText).size
-          case _ =>
-            mapper.readTree(url).findValues("id").asScala.map(_.asText)
-              .filter(_ != "driver").size
+        if (sc.isLocal) {
+          mapper.readTree(url).findValues("id").asScala.map(_.asText).size
+        } else {
+          mapper.readTree(url).findValues("id").asScala.map(_.asText)
+            .count(_ != "driver")
         }
       } else {
         Int.MaxValue
@@ -156,7 +151,7 @@ class SparkParallelismTracker(
     } else {
       try {
         logger.info(s"starting GPU training with timeout set as $timeout ms" +
-          s"for waiting for resources")
+          s" for waiting for resources")
         waitForCondition(numAliveCores >= requestedCores && numAliveWorkers >= numWorkers, timeout)
       } catch {
         case _: TimeoutException =>

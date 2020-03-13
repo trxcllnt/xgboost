@@ -16,17 +16,16 @@
 
 package ml.dmlc.xgboost4j.scala.spark
 
-import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
-import ml.dmlc.xgboost4j.java.{Rabit, XGBoostSparkJNI}
+import ai.rapids.cudf.Table
+import ml.dmlc.xgboost4j.java.Rabit
 import ml.dmlc.xgboost4j.scala.spark.params._
-import ml.dmlc.xgboost4j.scala.spark.rapids.{ColumnBatchToRow, GpuDataset, RowConverter}
+import ml.dmlc.xgboost4j.scala.spark.rapids.{PluginUtils, RowConverter}
 import ml.dmlc.xgboost4j.scala.{Booster, DMatrix, EvalTrait, ObjectiveTrait, XGBoost => SXGBoost}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.logging.LogFactory
 import org.apache.hadoop.fs.Path
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.ml.attribute._
 import org.apache.spark.ml.classification._
 import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.param._
@@ -174,66 +173,84 @@ class XGBoostClassifier (
       set(objectiveType, "classification")
     }
 
-    val _numClasses = getNumClasses(dataset)
-    if (isDefined(numClass) && $(numClass) != _numClasses) {
-      throw new Exception("The number of classes in dataset doesn't match " +
-        "\'num_class\' in xgboost params.")
-    }
-
-    val weight = if (!isDefined(weightCol) || $(weightCol).isEmpty) lit(1.0) else col($(weightCol))
-    val baseMargin = if (!isDefined(baseMarginCol) || $(baseMarginCol).isEmpty) {
-      lit(Float.NaN)
+    val (numClasses, booster, metrics) = if (PluginUtils.isSupportColumnar) {
+      // Spark plugin for GPU is loaded, go into GPU pipeline
+      trainHonorGpu(dataset.asInstanceOf[DataFrame])
     } else {
-      col($(baseMarginCol))
+      // Others fallback to CPU pipeline
+
+      val _numClasses = getNumClasses(dataset)
+      if (isDefined(numClass) && $(numClass) != _numClasses) {
+        throw new Exception("The number of classes in dataset doesn't match " +
+          "\'num_class\' in xgboost params.")
+      }
+
+      val weight = if (!isDefined(weightCol) || $(weightCol).isEmpty) lit(1.0)
+                   else col($(weightCol))
+      val baseMargin = if (!isDefined(baseMarginCol) || $(baseMarginCol).isEmpty) {
+        lit(Float.NaN)
+      } else {
+        col($(baseMarginCol))
+      }
+
+      val trainingSet: RDD[XGBLabeledPoint] = DataUtils.convertDataFrameToXGBLabeledPointRDDs(
+        col($(labelCol)), col($(featuresCol)), weight, baseMargin,
+        None, dataset.asInstanceOf[DataFrame]).head
+      val evalRDDMap = getEvalSets(xgboostParams).map {
+        case (name, dataFrame) => (name,
+          DataUtils.convertDataFrameToXGBLabeledPointRDDs(col($(labelCol)), col($(featuresCol)),
+            weight, baseMargin, None, dataFrame).head)
+      }
+      transformSchema(dataset.schema, logging = true)
+      val derivedXGBParamMap = MLlib2XGBoostParams
+      // All non-null param maps in XGBoostClassifier are in derivedXGBParamMap.
+      val (_booster, _metrics) = XGBoost.trainDistributed(trainingSet, derivedXGBParamMap,
+        hasGroup = false, evalRDDMap)
+      (_numClasses, _booster, _metrics)
     }
 
-    val trainingSet: RDD[XGBLabeledPoint] = DataUtils.convertDataFrameToXGBLabeledPointRDDs(
-      col($(labelCol)), col($(featuresCol)), weight, baseMargin,
-      None, dataset.asInstanceOf[DataFrame]).head
-    val evalRDDMap = getEvalSets(xgboostParams).map {
-      case (name, dataFrame) => (name,
-        DataUtils.convertDataFrameToXGBLabeledPointRDDs(col($(labelCol)), col($(featuresCol)),
-          weight, baseMargin, None, dataFrame).head)
-    }
-    transformSchema(dataset.schema, logging = true)
-    val derivedXGBParamMap = MLlib2XGBoostParams
-    // All non-null param maps in XGBoostClassifier are in derivedXGBParamMap.
-    val (_booster, _metrics) = XGBoost.trainDistributed(trainingSet, derivedXGBParamMap,
-      hasGroup = false, evalRDDMap)
-    val model = new XGBoostClassificationModel(uid, _numClasses, _booster)
-    val summary = XGBoostTrainingSummary(_metrics)
+    val model = new XGBoostClassificationModel(uid, numClasses, booster)
+    val summary = XGBoostTrainingSummary(metrics)
     model.setSummary(summary)
     model
   }
 
-  override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
-
-  def fit(dataset: GpuDataset): XGBoostClassificationModel = {
-    if (!isDefined(evalMetric) || $(evalMetric).isEmpty) {
-      set(evalMetric, setupDefaultEvalMetric())
-    }
-    if (isDefined(customObj) && $(customObj) != null) {
-      set(objectiveType, "classification")
-    }
-
+  private def trainHonorGpu(columnarDF: DataFrame): (Int, Booster, Map[String, Array[Float]]) = {
+    // Check columns and build column data
     val weightColName = if (isDefined(weightCol)) $(weightCol) else null
-    val colNames = XGBoost.buildGDFColumnNames($(featuresCols), $(labelCol),
-      weightColName, null)
-    val derivedXGBParamMap = MLlib2XGBoostParams
-    val (_booster, _metrics) = XGBoost.trainDistributedForGpuDataset(dataset, colNames,
-      derivedXGBParamMap, getGpuEvalSets(xgboostParams), true)
-
-    // Alreadly moved numClass checking to executor end.
-    // Here we just keep right for binary classification
-    var __numClass = 2
-    if (isDefined(numClass) && $(numClass) > 2) {
-      __numClass = $(numClass)
+    val columnData = DataUtils.buildGDFColumnData($(featuresCols), $(labelCol),
+      weightColName, null, columnarDF)
+    // eval map
+    val evalRDDMap = getEvalSets(xgboostParams).map {
+      case (name, df) => (name, DataUtils.buildGDFColumnData($(featuresCols), $(labelCol),
+        weightColName, null, df))
     }
-    val model = new XGBoostClassificationModel(uid, __numClass, _booster)
-    val summary = XGBoostTrainingSummary(_metrics)
-    model.setSummary(summary).setParent(this)
-    copyValues(model)
+    val derivedXGBParamMap = MLlib2XGBoostParams
+    val (_booster, _metrics) = XGBoost.trainDistributedPreferGpu(columnData,
+      derivedXGBParamMap, evalRDDMap, true)
+
+    // Already moved numClass checking to executor end.
+    // Here we just keep right for binary classification
+    var _numClass = 2
+    if (isDefined(numClass) && $(numClass) > 2) {
+      _numClass = $(numClass)
+    }
+    (_numClass, _booster, _metrics)
   }
+
+  protected override def validateAndTransformSchema(
+      schema: StructType,
+      fitting: Boolean,
+      featuresDataType: DataType): StructType = {
+    if (PluginUtils.isSupportColumnar) {
+      // Bypass the column check for GPU pipeline
+      schema
+    } else {
+      super.validateAndTransformSchema(schema, fitting, featuresDataType)
+    }
+  }
+
+  override def copy(extra: ParamMap): XGBoostClassifier = defaultCopy(extra)
 }
 
 object XGBoostClassifier extends DefaultParamsReadable[XGBoostClassifier] {
@@ -321,18 +338,12 @@ class XGBoostClassificationModel private[ml](
     0.0f
   }
 
-  private def transformInternal(dataset: GpuDataset, colNameToBuild: Option[String] = None):
-      DataFrame = {
-    val rawSchema = dataset.schema
+  private def transformInternalHonorGpu(dataFrame: DataFrame): DataFrame = {
+    val originalSchema = dataFrame.schema
 
     // dataReadSchema filters out some fields that RowConverter is not supporting
-    val dataReadSchema = colNameToBuild.map(name => StructType(rawSchema.fields.filter(x =>
-      RowConverter.isSupportingType(x.dataType) && x.name.equals(name))))
-      .getOrElse(StructType(rawSchema.fields.filter(x =>
-        RowConverter.isSupportingType(x.dataType))))
-
-    colNameToBuild.map(name => require(dataReadSchema.nonEmpty, s"Schema didn't include " +
-      s"${name} column to build! "))
+    val dataReadSchema = StructType(originalSchema.fields.filter(x =>
+      RowConverter.isSupportingType(x.dataType)))
 
     val schema = StructType(dataReadSchema.fields ++
       Seq(StructField(name = _rawPredictionCol, dataType =
@@ -340,36 +351,26 @@ class XGBoostClassificationModel private[ml](
       Seq(StructField(name = _probabilityCol, dataType =
         ArrayType(FloatType, containsNull = false), nullable = false)))
 
-    val bBooster = dataset.sparkSession.sparkContext.broadcast(_booster)
-    val appName = dataset.sparkSession.sparkContext.appName
+    val bBooster = dataFrame.sparkSession.sparkContext.broadcast(_booster)
+    val appName = dataFrame.sparkSession.sparkContext.appName
 
-    val derivedXGBParamMap = MLlib2XGBoostParams
-    val featuresColNames = derivedXGBParamMap.getOrElse("features_cols", Nil)
-      .asInstanceOf[Seq[String]]
-
-    val indices = Seq(featuresColNames.toArray).map(
-      _.filter(rawSchema.fieldNames.contains).map(rawSchema.fieldIndex)
-    )
-
-    require(indices(0).length == featuresColNames.length,
+    val featureIndices = $(featuresCols).filter(originalSchema.fieldNames.contains)
+      .map(originalSchema.fieldIndex)
+    require(featureIndices.length == $(featuresCols).length,
       "Features column(s) in schema do NOT match the one(s) in parameters. " +
-        s"Expect [${featuresColNames.mkString(", ")}], " +
-        s"but found [${indices(0).map(rawSchema.fieldNames).mkString(", ")}]!")
+        s"Expect [${$(featuresCols).mkString(", ")}], " +
+        s"but found [${featureIndices.map(originalSchema.fieldNames).mkString(", ")}]!")
 
     val missing = getMissingValue
 
-    val resultRDD = dataset.mapColumnarBatchPerPartition((iter: Iterator[GpuColumnBatch]) => {
-      // call allocateGpuDevice to force assignment of GPU when in exclusive process mode
-      // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
-      // it doesn't hurt to call allocateGpuDevice so just always do it.
-      var gpuId = XGBoostSparkJNI.allocateGpuDevice()
-      logger.info("XGboost transformGPUDataSet using device: " + gpuId)
-      if (gpuId == 0) {
-        gpuId = -1;
-      }
+    val sc = dataFrame.sparkSession.sparkContext
+    val isLocal = sc.isLocal
+    val resultRDD = PluginUtils.toColumnarRdd(dataFrame).mapPartitions((iter: Iterator[Table]) => {
+      val gpuId = DataUtils.getGpuId(isLocal)
+      logger.info("XGboost transform GPU pipeline using device: " + gpuId)
 
-      val ((dm, columnBatchToRow), time) = GpuDataset.time("Transform: build dmatrix and row") {
-        DataUtils.buildDMatrixIncrementally(gpuId, missing, indices, iter, colNameToBuild)
+      val ((dm, columnBatchToRow), time) = PluginUtils.time("Transform: build dmatrix and row") {
+        DataUtils.buildDMatrixIncrementally(gpuId, missing, featureIndices, iter, originalSchema)
       }
       logger.debug("Benchmark [Transform: Build Dmatrix and Row] " + time)
 
@@ -395,7 +396,7 @@ class XGBoostClassificationModel private[ml](
     })
 
     bBooster.unpersist(blocking = false)
-    dataset.sparkSession.createDataFrame(resultRDD, generateResultSchema(schema))
+    dataFrame.sparkSession.createDataFrame(resultRDD, generateResultSchema(schema))
   }
 
   // Generate raw prediction and probability prediction.
@@ -539,80 +540,11 @@ class XGBoostClassificationModel private[ml](
     Array(rawPredictionItr, probabilityItr, predLeafItr, predContribItr)
   }
 
-
-  def transform(dataset: GpuDataset): DataFrame = {
-    transformWithColumn(dataset)
-  }
-
-  /**
-   *
-   * @param dataset GpuDataset
-   * @param colNameToBuild if defined, builds its column or else builds all columns
-   * @return
-   */
-  private[spark] def transformWithColumn(dataset: GpuDataset,
-      colNameToBuild: Option[String] = None): DataFrame = {
-    // transformSchema(dataset.schema, logging = true)
-    if (isDefined(thresholds)) {
-      require($(thresholds).length == numClasses, this.getClass.getSimpleName +
-        ".transform() called with non-matching numClasses and thresholds.length." +
-        s" numClasses=$numClasses, but thresholds has length ${$(thresholds).length}")
-    }
-
-    // Output selected columns only.
-    // This is a bit complicated since it tries to avoid repeated computation.
-    var outputData = transformInternal(dataset, colNameToBuild)
-    var numColsOutput = 0
-
-    val rawPredictionUDF = udf { rawPrediction: mutable.WrappedArray[Float] =>
-      val raw = rawPrediction.map(_.toDouble).toArray
-      val rawPredictions = if (numClasses == 2) Array(-raw(0), raw(0)) else raw
-      Vectors.dense(rawPredictions)
-    }
-
-    val probabilityUDF = udf { probability: mutable.WrappedArray[Float] =>
-      val prob = probability.map(_.toDouble).toArray
-      val probabilities = if (numClasses == 2) Array(1.0 - prob(0), prob(0)) else prob
-      Vectors.dense(probabilities)
-    }
-
-    val predictUDF = udf { probability: mutable.WrappedArray[Float] =>
-      // From XGBoost probability to MLlib prediction
-      val prob = probability.map(_.toDouble).toArray
-      val probabilities = if (numClasses == 2) Array(1.0 - prob(0), prob(0)) else prob
-      probability2prediction(Vectors.dense(probabilities))
-    }
-
-    if ($(rawPredictionCol).nonEmpty) {
-      outputData = outputData
-        .withColumn(getRawPredictionCol, rawPredictionUDF(col(_rawPredictionCol)))
-      numColsOutput += 1
-    }
-
-    if ($(probabilityCol).nonEmpty) {
-      outputData = outputData
-        .withColumn(getProbabilityCol, probabilityUDF(col(_probabilityCol)))
-      numColsOutput += 1
-    }
-
-    if ($(predictionCol).nonEmpty) {
-      outputData = outputData
-        .withColumn($(predictionCol), predictUDF(col(_probabilityCol)))
-      numColsOutput += 1
-    }
-
-    if (numColsOutput == 0) {
-      this.logWarning(s"$uid: ProbabilisticClassificationModel.transform() was called as NOOP" +
-        " since no output columns were set.")
-    }
-    outputData
-      .toDF
-      .drop(col(_rawPredictionCol))
-      .drop(col(_probabilityCol))
-  }
-
   override def transform(dataset: Dataset[_]): DataFrame = {
-    transformSchema(dataset.schema, logging = true)
+    val isSupportColumnar = PluginUtils.isSupportColumnar
+    if (!isSupportColumnar) {
+      transformSchema(dataset.schema, logging = true)
+    }
     if (isDefined(thresholds)) {
       require($(thresholds).length == numClasses, this.getClass.getSimpleName +
         ".transform() called with non-matching numClasses and thresholds.length." +
@@ -621,7 +553,11 @@ class XGBoostClassificationModel private[ml](
 
     // Output selected columns only.
     // This is a bit complicated since it tries to avoid repeated computation.
-    var outputData = transformInternal(dataset)
+    var outputData = if (isSupportColumnar) {
+      transformInternalHonorGpu(dataset.asInstanceOf[DataFrame])
+    } else {
+      transformInternal(dataset)
+    }
     var numColsOutput = 0
 
     val rawPredictionUDF = udf { rawPrediction: mutable.WrappedArray[Float] =>
