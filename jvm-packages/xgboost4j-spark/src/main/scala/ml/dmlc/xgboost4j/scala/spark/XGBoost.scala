@@ -19,6 +19,7 @@ package ml.dmlc.xgboost4j.scala.spark
 import java.io.File
 import java.nio.file.Files
 
+import ai.rapids.cudf.Table
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
 
 import scala.collection.{AbstractIterator, mutable}
@@ -28,15 +29,15 @@ import ml.dmlc.xgboost4j.java.{IRabitTracker, Rabit, XGBoostError, XGBoostSparkJ
 import ml.dmlc.xgboost4j.scala.rabit.RabitTracker
 import ml.dmlc.xgboost4j.scala.spark.params.BoosterParams
 import ml.dmlc.xgboost4j.scala.spark.params.LearningTaskParams
-import ml.dmlc.xgboost4j.scala.spark.rapids.GpuDataset
+import ml.dmlc.xgboost4j.scala.spark.rapids.PluginUtils
 import ml.dmlc.xgboost4j.scala.{XGBoost => SXGBoost, _}
 import ml.dmlc.xgboost4j.{LabeledPoint => XGBLabeledPoint}
 import org.apache.commons.io.FileUtils
 import org.apache.commons.logging.LogFactory
 import org.apache.spark.rdd.RDD
-import org.apache.spark.{SparkContext, SparkParallelismTracker, TaskContext, TaskFailedListener}
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.catalyst.encoders.RowEncoder
+import org.apache.spark.{SparkContext, SparkParallelismTracker, TaskContext}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession, functions}
 import org.apache.spark.storage.StorageLevel
 
 /**
@@ -70,14 +71,10 @@ private[spark] case class XGBLabeledPointGroup(
     isEdgeGroup: Boolean)
 
 // ========= GPU Pipeline Start =============
-private case class GDFColumnData(
-    rawDataset: GpuDataset,
-    colsIndices: Seq[Array[Int]])
-
-private case class WatchesMetaInfo(
-    inferNumClass: Boolean = false,
-    numClass: Double = 0.0,
-    groupIDs: Seq[Int] = Seq.empty)
+private[spark] case class GDFColumnData(
+    rawDF: DataFrame,
+    colsIndices: Seq[Array[Int]],
+    groupColName: Option[String])
 // ========= GPU Pipeline End =============
 
 object XGBoost extends Serializable {
@@ -237,14 +234,14 @@ object XGBoost extends Serializable {
           metrics, obj, eval, earlyStoppingRound = numEarlyStoppingRounds, prevBooster)
       if (overridedParams.contains("tree_method") &&
         overridedParams("tree_method").toString == "gpu_hist") {
-        taskContext.addTaskCompletionListener(_ => {
+        taskContext.addTaskCompletionListener[Unit] { _ =>
           // Booster holds a pointer to native gpu memory. if Booster is not disposed.
           // then GPU memory will leak. From upstream. Booster's finalize (dispose) depends
           // on JVM GC. GC is not triggered freqently, which means gpu memory already leaks.
           // The fix is to force GC.
           System.gc()
           System.runFinalization()
-        })
+        }
       }
       Iterator(booster -> watches.toMap.keys.zip(metrics).toMap)
     } catch {
@@ -379,7 +376,7 @@ object XGBoost extends Serializable {
     if (params.contains("train_test_ratio")) {
       logger.warn("train_test_ratio is deprecated since XGBoost 0.82, we recommend to explicitly" +
         " pass a training and multiple evaluation datasets by passing 'eval_sets' as" +
-        " Map('name'->'Dataset') for CPU or Map('name'->'GpuDataset') for GPU.")
+        " Map('name'->'Dataset')")
     }
     require(nWorkers > 0, "you must specify more than 0 workers")
     if (obj != null) {
@@ -496,7 +493,7 @@ object XGBoost extends Serializable {
         updatedParams = updatedParams + (treeMethod -> "gpu_hist")
       } else {
         require(tmValue.startsWith("gpu_"),
-          "Now for GpuDataset, xgboost-spark only supports tree_method as " +
+          "Now for training on GPU, xgboost-spark only supports tree_method as " +
             s"[${BoosterParams.supportedTreeMethods.filter(_.startsWith("gpu_")).mkString(", ")}]" +
             s", but found '$tmValue'")
       }
@@ -507,104 +504,91 @@ object XGBoost extends Serializable {
     updatedParams
   }
 
-  // called by classifier or regressor
-  private[spark] def buildGDFColumnNames(
-      featuresColNames: Seq[String],
-      labelColName: String,
-      weightColName: String,
-      groupColName: String): Seq[Array[String]] = {
-    require(featuresColNames.nonEmpty, "No features column is specified!")
-    require(labelColName != null && labelColName.nonEmpty, "No label column is specified!")
-    val weightAndGroupName = Seq(weightColName, groupColName).map(
-      name => if (name == null || name.isEmpty) Array[String]() else Array(name)
-    )
-    // Seq in this order: features, label, weight, group
-    Seq(featuresColNames.toArray, Array(labelColName)) ++ weightAndGroupName
+  private def repartitionForGroup(
+      groupName: String,
+      dataFrame: DataFrame,
+      nWorkers: Int): DataFrame = {
+    // Group the data first
+    logger.info("LTR start groupBy")
+    val schema = dataFrame.schema
+    val groupedDF = dataFrame
+      .groupBy(groupName)
+      .agg(functions.collect_list(functions.struct(
+        schema.fieldNames.map(functions.col): _*)) as "list")
+
+    implicit val encoder = RowEncoder(schema)
+    // Expand the grouped rows after repartition
+    groupedDF.repartition(nWorkers).mapPartitions(iter => {
+      new Iterator[Row] {
+        var iterInRow: Iterator[Any] = Iterator.empty
+
+        override def hasNext: Boolean = {
+          if (iter.hasNext && !iterInRow.hasNext) {
+            // the first is groupId, second is list
+            iterInRow = iter.next.getSeq(1).iterator
+          }
+          iterInRow.hasNext
+        }
+
+        override def next(): Row = {
+          iterInRow.next.asInstanceOf[Row]
+        }
+      }
+    })
   }
 
-  // 'colNames' keeps the same order with that in 'buildGDFColumnNames'
-  private def checkAndGetGDFColumnIndices(schema: StructType,
-      colNames: Seq[Array[String]]): Seq[Array[Int]] = {
-    val indices = colNames.map(_.filter(schema.fieldNames.contains).map(schema.fieldIndex))
-    val featuresColNames = colNames(0)
-    require(indices(0).length == featuresColNames.length,
-      "Features column(s) in schema do NOT match the one(s) in parameters. " +
-      s"Expect [${featuresColNames.mkString(", ")}], " +
-      s"but found [${indices(0).map(schema.fieldNames).mkString(", ")}]!")
-    require(indices(1).nonEmpty, "Missing label column in schema!")
-    if (indices(2).isEmpty) {
-      logger.warn("Missing weight column!")
-    }
-    // Check if has group
-    if (colNames(3).nonEmpty) {
-      require(indices(3).nonEmpty, "Can not find group column in schema!")
-    }
-    indices
-  }
-
-  // repartition all the GpuDatasets (training and evaluation) to nWorkers,
-  // And get the GDF column indices separately from each GpuDataset.
-  // Then wrap the GpuDatasets and its indices into a map
-  private def prepareDataForGpuDataset(
-      trainingData: GpuDataset,
-      colNames: Seq[Array[String]],
-      evalSetsMap: Map[String, GpuDataset],
+  // repartition all the Columnar RDDs (training and evaluation) to nWorkers,
+  // and get the GDF column indices separately from each Columnar RDD.
+  // Then wrap this repartitioned RDD and columns indices by a map
+  private def prepareDataForGpu(
+      trainingData: GDFColumnData,
+      evalSetsMap: Map[String, GDFColumnData],
       nWorkers: Int,
       params: Map[String, Any]): Map[String, GDFColumnData] = {
     // Cache is not supported
     val isCacheData = params.getOrElse("cacheTrainingSet", false).asInstanceOf[Boolean]
     if (isCacheData) {
-      logger.warn("Data cache is not support for GpuDataset!")
+      logger.warn("Data cache is not support for Gpu pipeline!")
     }
-    // For LTR, file split is not allowed due to limitations.
-    val splitFile = colNames(3).isEmpty
-    logger.info(s"File split in repartition is" +
-      s" ${if (splitFile) "enabled" else "disabled for LTR"}.")
-    // Place train at the first one
+
     (Map(trainName -> trainingData) ++ evalSetsMap).map {
-      case (name, dataset) =>
-        // Always repartition due to not easy to get the current number of
-        // partitions from GpuDataset directly, just let GpuDataset handle all the cases.
-        val newDataset = dataset.repartition(nWorkers, splitFile)
-        // Check and get gdf columns for all GpuDataset(s)
-        name -> GDFColumnData(newDataset, checkAndGetGDFColumnIndices(newDataset.schema, colNames))
+      case (name, colData) =>
+        // No light cost way to get number of partitions from DataFrame, so always repartition
+        val newDF = colData.groupColName
+          .map(gn => repartitionForGroup(gn, colData.rawDF, nWorkers))
+          .getOrElse(colData.rawDF.repartition(nWorkers))
+        name -> GDFColumnData(newDF, colData.colsIndices, colData.groupColName)
     }
   }
 
-  // zip all the GpuDatasetRDDs from GpuDatasets into one RDD containing named GDF column
-  // Batch.
-  private def coPartitionForGpuDataset(
+  // zip all the Columnar RDDs into one RDD containing named GDF column batch.
+  private def coPartitionForGpu(
       dataMap: Map[String, GDFColumnData],
       sc: SparkContext,
-      nWorkers: Int): RDD[(String, Iterator[GpuColumnBatch])] = {
+      nWorkers: Int): RDD[(String, Iterator[Table])] = {
     val emptyDataRdd = sc.parallelize(
-      Array.fill[(String, Iterator[GpuColumnBatch])](nWorkers)(null), nWorkers)
+      Array.fill[(String, Iterator[Table])](nWorkers)(null), nWorkers)
 
     dataMap.foldLeft(emptyDataRdd) {
       case (zippedRdd, (name, gdfColData)) =>
-        zippedRdd.zipPartitions(gdfColData.rawDataset.buildRDD) {
-          (itWrapper, itColBatch) =>
-            (itWrapper.toArray :+ (name -> itColBatch)).filter(x => x != null).toIterator
+        zippedRdd.zipPartitions(PluginUtils.toColumnarRdd(gdfColData.rawDF)) {
+          (itWrapper, itTable) =>
+            (itWrapper.toArray :+ (name -> itTable)).filter(x => x != null).toIterator
         }
     }
   }
 
   // This method is running on executor side
-  private def appendGpuIdToParameters(params: Map[String, Any]): (Int, Map[String, Any]) = {
-    // Call allocateGpuDevice to force assignment of GPU when in exclusive process mode
-    // and pass that as the gpu_id, assumption is that if you are using CUDA_VISIBLE_DEVICES
-    // it doesn't hurt to call allocateGpuDevice so just always do it.
-    val gpuId = XGBoostSparkJNI.allocateGpuDevice()
-    logger.info("XGboost trainForGpuDataset using device: " + gpuId)
-    if (gpuId != 0) {
-      (gpuId, params + ("gpu_id" -> gpuId.toString()))
-    } else {
-      (gpuId, params)
-    }
+  private def appendGpuIdToParameters(params: Map[String, Any], isLocal: Boolean):
+      (Int, Map[String, Any]) = {
+    val gpuId = DataUtils.getGpuId(isLocal)
+    logger.info("XGboost GPU training using device: " + gpuId)
+    XGBoostSparkJNI.allocateGpuDevice(gpuId)
+    (gpuId, params + ("gpu_id" -> gpuId.toString))
   }
 
   @throws(classOf[XGBoostError])
-  private def trainForGpuDataset(
+  private def trainPreferGpu(
       sc: SparkContext,
       dataMap: Map[String, GDFColumnData],
       noEvalSet: Boolean,
@@ -617,13 +601,14 @@ object XGBoost extends Serializable {
     val (nWorkers, _, useExternalMemory, obj, eval, missing, _, _, _, _) =
       parameterFetchAndValidation(updatedParams, sc)
 
+    val isLocal = sc.isLocal
     // Start training
     if (noEvalSet) {
       // Get the indices here at driver side to avoid passing the whole Map to executor(s)
       val colIndicesForTrain = dataMap(trainName).colsIndices
-      dataMap(trainName).rawDataset.mapColumnarBatchPerPartition({
-        iter: Iterator[GpuColumnBatch] =>
-          val (gpuId, paramsWithGpuId) = appendGpuIdToParameters(updatedParams)
+      PluginUtils.toColumnarRdd(dataMap(trainName).rawDF).mapPartitions({
+        iter: Iterator[Table] =>
+          val (gpuId, paramsWithGpuId) = appendGpuIdToParameters(updatedParams, isLocal)
 
           val watches = Watches.buildWatches(getCacheDirName(useExternalMemory),
             gpuId, missing, colIndicesForTrain, iter, inferNumClass)
@@ -634,9 +619,9 @@ object XGBoost extends Serializable {
       // Train with evaluation sets
       // Get the indices here at driver side to avoid passing the whole Map to executor(s)
       val nameAndColIndices = dataMap.map(nc => (nc._1, nc._2.colsIndices))
-      coPartitionForGpuDataset(dataMap, sc, nWorkers).mapPartitions {
+      coPartitionForGpu(dataMap, sc, nWorkers).mapPartitions {
         nameAndColumnBatchIter =>
-          val (gpuId, paramsWithGpuId) = appendGpuIdToParameters(updatedParams)
+          val (gpuId, paramsWithGpuId) = appendGpuIdToParameters(updatedParams, isLocal)
 
           val watches = Watches.buildWatchesWithEval(getCacheDirName(useExternalMemory), gpuId,
             missing, nameAndColIndices, nameAndColumnBatchIter, inferNumClass)
@@ -651,21 +636,20 @@ object XGBoost extends Serializable {
     * @return A tuple of the booster and the metrics used to build training summary
     */
   @throws(classOf[XGBoostError])
-  private[spark] def trainDistributedForGpuDataset(
-      trainingData: GpuDataset,
-      colNames: Seq[Array[String]],
+  private[spark] def trainDistributedPreferGpu(
+      trainingData: GDFColumnData,
       params: Map[String, Any],
-      evalSetsMap: Map[String, GpuDataset] = Map(),
+      evalSetsMap: Map[String, GDFColumnData] = Map(),
       inferNumClass: Boolean = false): (Booster, Map[String, Array[Float]]) = {
-    logger.info(s"GpuDataset Running XGBoost ${spark.VERSION} with parameters: " +
+    logger.info(s"Gpu Running XGBoost ${spark.VERSION} with parameters: " +
       s"\n${params.mkString("\n")}")
     // First check and get parameters.
-    // Second check and get data for training with GpuDataset
+    // Second prepare the training data and run training
     // Then setup checkpoint manager
-    val sc = trainingData.sparkSession.sparkContext
+    val sc = trainingData.rawDF.sparkSession.sparkContext
     val (nWorkers, round, _, _, _, _, trackerConf, timeoutRequestWorkers,
       checkpointPath, checkpointInterval) = parameterFetchAndValidation(params, sc)
-    val dataMap = prepareDataForGpuDataset(trainingData, colNames, evalSetsMap, nWorkers, params)
+    val dataMap = prepareDataForGpu(trainingData, evalSetsMap, nWorkers, params)
     val checkpointManager = new CheckpointManager(sc, checkpointPath)
     checkpointManager.cleanUpHigherVersions(round.asInstanceOf[Int])
     var prevBooster = checkpointManager.loadCheckpointAsBooster
@@ -678,7 +662,7 @@ object XGBoost extends Serializable {
             val overriddenParams = overrideParamsAccordingToTaskCPUs(params, sc)
             val parallelismTracker = new SparkParallelismTracker(sc, timeoutRequestWorkers,
               nWorkers)
-            val boostersAndMetrics = trainForGpuDataset(sc, dataMap, evalSetsMap.isEmpty,
+            val boostersAndMetrics = trainPreferGpu(sc, dataMap, evalSetsMap.isEmpty,
               overriddenParams, tracker.getWorkerEnvs, checkpointRound, prevBooster, inferNumClass)
             val sparkJobThread = new Thread() {
               override def run() {
@@ -689,7 +673,7 @@ object XGBoost extends Serializable {
             sparkJobThread.setUncaughtExceptionHandler(tracker)
             sparkJobThread.start()
             val trackerReturnVal = parallelismTracker.executeHonorForGpu(tracker.waitFor(0L))
-            logger.info(s"GpuDataset Rabit returns with exit code $trackerReturnVal")
+            logger.info(s"Gpu Rabit returns with exit code $trackerReturnVal")
             val (booster, metrics) = postTrackerReturnProcessing(trackerReturnVal,
               boostersAndMetrics, sparkJobThread)
             if (checkpointRound < round) {
@@ -939,11 +923,9 @@ private object Watches {
   }
 
   // ========= GPU Pipeline Begin =============
-  // Suppose "indices" are given in this order <features, label, weight, group>,
-  // Pls refer to method 'checkAndGetGDFColumnIndices'.
+  // Suppose "indices" are given in this order <features, label, weight, group>
   private def buildDMatrixIncrementally(gpuId: Int, missing: Float, indices: Seq[Array[Int]],
-      iter: Iterator[GpuColumnBatch],
-      inferNumClass: Boolean = false): (DMatrix, Double, Seq[Int]) = {
+      iter: Iterator[Table], inferNumClass: Boolean = false): (DMatrix, Double) = {
 
     if (!missing.isNaN && missing != 0.0f) {
       throw new RuntimeException(s"you can only specify missing value as 0.0 (the currently" +
@@ -958,16 +940,13 @@ private object Watches {
     // For LTR
     val groupInfo = new mutable.ArrayBuffer[java.lang.Integer]
     val weightInfo = new mutable.ArrayBuffer[java.lang.Float]
-    var firstGroupId = 0
     var groupId = 0
     val isLTR = groupIndices.nonEmpty
 
     var max: Double = Double.MinValue
     while (iter.hasNext) {
-      val columnBatch = iter.next()
-      columnBatch.samplingTable()
+      val columnBatch = new GpuColumnBatch(iter.next(), null)
       if (isLTR) {
-        if (isFirstBunch) firstGroupId = columnBatch.getIntInColumn(0, groupIndices(0), 0)
         // Build group info, along with weight info if needed (-1 means no weight)
         val weightIdx = if (hasWeight) weightIndices(0) else -1
         groupId = columnBatch.groupAndAggregateOnColumnsHost(groupIndices(0), weightIdx, groupId,
@@ -976,7 +955,7 @@ private object Watches {
 
       // Transform indices to native handles for (features, label)
       val gdfColsHandles = indices.take(2).map(_.map(columnBatch.getColumn))
-      val (features_, label_) = (gdfColsHandles(0), gdfColsHandles(1))
+      val (features_, label_) = (gdfColsHandles.head, gdfColsHandles(1))
       // Weight is set differently from LTR to non-LTR.
       // GPU column handle is used for non-LTR, but cpu "Array[Float]" is used for LTR to support
       // chunk loading.
@@ -1000,14 +979,15 @@ private object Watches {
       if (inferNumClass) {
         // calculate max label to reduce
         indices(1).foreach(index => {
-          val scalar = columnBatch.getColumnVector(index).max()
+          val scalar = columnBatch.getColumnVector(index).max
           if (scalar.isValid) {
             val tmp = scalar.getDouble
             max = if (max < tmp) tmp else max
           }
         })
       }
-      columnBatch.samplingClose()
+      // Close the table(GpuColumnBatch)
+      columnBatch.close()
     }
     logger.debug("Num class: " + max)
     if (dm != null && isLTR) {
@@ -1020,9 +1000,9 @@ private object Watches {
   }
 
   def buildWatches(cachedDirName: Option[String], gpuId: Int, missing: Float,
-      indices: Seq[Array[Int]], iter: Iterator[GpuColumnBatch],
+      indices: Seq[Array[Int]], iter: Iterator[Table],
       inferNumClass: Boolean = false): Watches = {
-    val ((dm, numClass, groupIDs), time) = GpuDataset.time("Train: Build DMatrix incrementally") {
+    val ((dm, numClass), time) = PluginUtils.time("Train: Build DMatrix incrementally") {
       buildDMatrixIncrementally(gpuId, missing, indices, iter, inferNumClass)
     }
     logger.debug("Benchmark[Train: Build DMatrix incrementally] " + time)
@@ -1036,14 +1016,14 @@ private object Watches {
 
   def buildWatchesWithEval(cachedDirName: Option[String], gpuId: Int, missing: Float,
       indices: Map[String, Seq[Array[Int]]],
-      nameAndGdfColumns: Iterator[(String, Iterator[GpuColumnBatch])],
+      nameAndGdfColumns: Iterator[(String, Iterator[Table])],
       inferNumClass: Boolean = false): Watches = {
 
     var watchesMetaInfo: Option[WatchesMetaInfo] = None
     val dms = nameAndGdfColumns.map {
       case (name, iter) => (name, {
         val inferring = inferNumClass && name == "train"
-        val ((dm, numClass, groupIDs), time) = GpuDataset.time(s"Train: Build $name DMatrix") {
+        val ((dm, tmpNumClass), time) = PluginUtils.time(s"Train: Build $name DMatrix") {
           buildDMatrixIncrementally(gpuId, missing, indices(name), iter, inferring)
         }
         logger.debug(s"Benchmark[Train build $name DMatrix] " + time)

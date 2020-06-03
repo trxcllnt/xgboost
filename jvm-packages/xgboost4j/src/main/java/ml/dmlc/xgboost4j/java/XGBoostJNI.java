@@ -19,6 +19,7 @@ import java.nio.ByteBuffer;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import ai.rapids.cudf.NativeDepsLoader;
 
 /**
  * xgboost JNI functions
@@ -31,6 +32,13 @@ class XGBoostJNI {
 
   static {
     try {
+      // Force loading the cuDF related native libraries to avoid packing 'librmm.so' into
+      // xgboost4j Jar file redundantly.
+      // XGBoost Spark involves dependence on librmm, we may refactor to use Java Rmm instead
+      // in future to eliminate this dependence which makes building/runtime pretty complicated.
+      logger.info("load cuDF libs");
+      NativeDepsLoader.libraryLoaded();
+      logger.info("load XGBoost libs");
       NativeLibLoader.initXGBoost();
     } catch (Exception ex) {
       logger.error("Failed to load native library", ex);
@@ -65,7 +73,7 @@ class XGBoostJNI {
   public final static native int XGDMatrixCreateFromMat(float[] data, int nrow, int ncol,
                                                         float missing, long[] out);
 
-  // CUDF support: Suppose gdf_columns are passed as array of native handles
+  // CUDF support: Suppose gpu columns are passed as array of native handles
   public final static native int XGDMatrixCreateFromCUDF(long[] cols, long[] out, int gpu_id, float missing);
 
   public final static native int XGDMatrixAppendCUDF(long handle, long[] cols, int gpu_id, float missing);

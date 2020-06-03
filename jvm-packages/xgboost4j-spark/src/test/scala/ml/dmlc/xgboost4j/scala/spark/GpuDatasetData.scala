@@ -20,75 +20,39 @@ import java.io.File
 
 import ai.rapids.cudf.{DType, Table}
 import ml.dmlc.xgboost4j.java.spark.rapids.GpuColumnBatch
-import ml.dmlc.xgboost4j.scala.spark.rapids.{GpuDataReader, GpuDataset}
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StringType, StructField, StructType, TimestampType}
+import org.apache.spark.sql.types.{
+  BooleanType, ByteType, DataType, DateType, DoubleType,
+  FloatType, IntegerType, LongType, ShortType, StructField, StructType, TimestampType
+}
 
 object GpuDatasetData {
 
   private val classifierTrainDataPath = "/iris.data.csv"
-  private val classifierTrainParquetDataPath = "/iris.data.parquet"
-  private val classifierTrainOrcDataPath = "/iris.data.orc"
   private val classifierTestDataPath = "/iris.test.data.csv"
   private val classifierSchema = new StructType(Array(
-    StructField("line_index", IntegerType),
-    StructField("A_NOT_USE", StringType),
-    StructField("sepal_length", FloatType),
-    StructField("B_NOT_USE", StringType),
-    StructField("sepal_width", FloatType),
-    StructField("C_NOT_USE", StringType),
-    StructField("petal_length", FloatType),
-    StructField("petal_width", FloatType),
-    StructField("classIndex", FloatType),
-    StructField("D_NOT_USE", StringType),
-    StructField("redundance", IntegerType)))
-
-  lazy val classifierFeatureCols: Seq[String] =
-    Seq("sepal_length", "sepal_width", "petal_length", "petal_width")
-
+    StructField("sepal length", FloatType),
+    StructField("sepal width", FloatType),
+    StructField("petal length", FloatType),
+    StructField("petal width", FloatType),
+    StructField("classIndex", FloatType)))
+/*
   def getClassifierTrainGpuDataset(spark: SparkSession): GpuDataset = {
     getTrainGpuDataset(spark, classifierSchema, classifierTrainDataPath)
-  }
-
-  def getClassifierTrainGpuDatasetFromOrc(spark: SparkSession): GpuDataset = {
-    new GpuDataReader(spark).orc(getTestDataPath(classifierTrainOrcDataPath))
-  }
-
-  def getClassifierTrainGpuDatasetFromParquet(spark: SparkSession): GpuDataset = {
-    new GpuDataReader(spark).parquet(getTestDataPath(classifierTrainParquetDataPath))
   }
 
   def getClassifierTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
     getTestGpuDataset(spark, classifierSchema, classifierTestDataPath)
   }
-
-  private val regressionTrainOrcDataPath = "/norank.train.withstring.orc"
-  private val regressionTrainParquetDataPath = "/norank.train.withstring.parquet"
-  private val regressionTrainDataPath = "/norank.train.withstring.csv"
-  private val regressionTestDataPath = "/norank.train.withstring.csv"
+*/
+  private val regressionTrainDataPath = "/norank.train.csv"
+  private val regressionTestDataPath = "/norank.train.csv"
   private val regressionSchema = new StructType(Array(
-    StructField("line_index", IntegerType),
-    StructField("A_NOT_USE", StringType),
     StructField("b", DoubleType),
-    StructField("B_NOT_USE", StringType),
     StructField("c", DoubleType),
-    StructField("C_NOT_USE", StringType),
     StructField("d", DoubleType),
-    StructField("D_NOT_USE", StringType),
-    StructField("e", DoubleType),
-    StructField("redundance", IntegerType)))
-
-  lazy val regressionFeatureCols: Seq[String] =
-    Seq("b", "c", "d")
-
-  def getRegressionTrainGpuDatasetFromParquet(spark: SparkSession): GpuDataset = {
-    new GpuDataReader(spark).parquet(getTestDataPath(regressionTrainParquetDataPath))
-  }
-
-  def getRegressionTrainGpuDatasetFromOrc(spark: SparkSession): GpuDataset = {
-    new GpuDataReader(spark).orc(getTestDataPath(regressionTrainOrcDataPath))
-  }
-
+    StructField("e", DoubleType)))
+/*
   def getRegressionTrainGpuDataset(spark: SparkSession): GpuDataset = {
     getTrainGpuDataset(spark, regressionSchema, regressionTrainDataPath)
   }
@@ -96,7 +60,7 @@ object GpuDatasetData {
   def getRegressionTestGpuDataset(spark: SparkSession): (GpuDataset, Long) = {
     getTestGpuDataset(spark, regressionSchema, regressionTestDataPath)
   }
-
+*/
   private val rankingTrainDataPath = "/rank.train.csv"
   private val rankingTestDataPath = "/rank.test.csv"
   private val rankingSchema = new StructType(Array(
@@ -105,7 +69,7 @@ object GpuDatasetData {
     StructField("c", FloatType),
     StructField("d", FloatType),
     StructField("group", IntegerType)))
-
+/*
   def getRankingTrainGpuDataset(spark: SparkSession): GpuDataset = {
     getTrainGpuDataset(spark, rankingSchema, rankingTrainDataPath)
   }
@@ -130,8 +94,8 @@ object GpuDatasetData {
 
     (test, counts(0)_2)
   }
-
-  private def getColumns(file: String, schema: StructType, features: Seq[String], label: String):
+*/
+  private def getColumns(file: String, schema: StructType, label: String):
   (Table, Array[Long], Array[Long]) = {
     val csvSchemaBuilder = ai.rapids.cudf.Schema.builder
     schema.foreach(f => csvSchemaBuilder.column(toDType(f.dataType), f.name))
@@ -140,7 +104,8 @@ object GpuDatasetData {
 
     var needTableClose = true
     try {
-      val featuresHandle = features.toArray.map(colName => {
+      val featuresColNames = schema.fieldNames.filter(_ != label)
+      val featuresHandle = featuresColNames.map(colName => {
           columnBatch.getColumn(schema.fieldIndex(colName))
       })
       val labelsHandle = Array(label).map(colName => {
@@ -163,9 +128,8 @@ object GpuDatasetData {
       case LongType => DType.INT64
       case FloatType => DType.FLOAT32
       case DoubleType => DType.FLOAT64
-      case DateType => DType.DATE32
-      case TimestampType => DType.TIMESTAMP
-      case StringType => DType.STRING // TODO what do we want to do about STRING_CATEGORY???
+      case DateType => DType.TIMESTAMP_DAYS
+      case TimestampType => DType.TIMESTAMP_MICROSECONDS
       case unknownType => throw new UnsupportedOperationException(
         s"Unsupported Spark SQL type $unknownType")
     }
@@ -205,32 +169,37 @@ object GpuDatasetData {
 
   lazy val classifierTest: (Array[Long], Array[Long]) = {
     val (table, features, labels) = getColumns(classifierTestDataPath,
-      classifierSchema, classifierFeatureCols, "classIndex")
+      classifierSchema, "classIndex")
     classifierTestTable = table;
     (features, labels)
   }
   lazy val classifierTrain: (Array[Long], Array[Long]) = {
     val (table, features, labels) = getColumns(classifierTrainDataPath,
-      classifierSchema, classifierFeatureCols, "classIndex")
+      classifierSchema, "classIndex")
     classifierTrainTable = table
     (features, labels)
   }
+  lazy val classifierFeatureCols: Seq[String] =
+    classifierSchema.fieldNames.filter(_ != "classIndex")
 
   var regressionTestTable: Table = null
   var regressionTrainTable: Table = null
 
   lazy val regressionTest: (Array[Long], Array[Long]) = {
     val (table, features, labels) = getColumns(regressionTestDataPath,
-      regressionSchema, regressionFeatureCols, "e")
+      regressionSchema, "e")
     regressionTestTable = table
     (features, labels)
   }
   lazy val regressionTrain: (Array[Long], Array[Long]) = {
     val (table, features, labels) = getColumns(regressionTrainDataPath,
-      regressionSchema, regressionFeatureCols, "e")
+      regressionSchema, "e")
     regressionTrainTable = table
     (features, labels)
   }
+
+  lazy val regressionFeatureCols: Seq[String] =
+    regressionSchema.fieldNames.filter(_ != "e")
 
   lazy val rankingFeatureCols: Seq[String] =
     rankingSchema.fieldNames.filter(_ != "group").filter(_ != "label")
