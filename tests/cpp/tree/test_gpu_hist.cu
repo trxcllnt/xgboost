@@ -2,6 +2,7 @@
  * Copyright 2017-2021 XGBoost contributors
  */
 #include <gtest/gtest.h>
+#include <thrust/copy.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <dmlc/filesystem.h>

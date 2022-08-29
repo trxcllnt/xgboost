@@ -10,6 +10,11 @@
 #include <xgboost/metric.h>
 #include <xgboost/host_device_vector.h>
 #include <thrust/iterator/discard_iterator.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/reduce.h>
+#include <thrust/scan.h>
+#include <thrust/transform.h>
 
 #include <cmath>
 #include <array>

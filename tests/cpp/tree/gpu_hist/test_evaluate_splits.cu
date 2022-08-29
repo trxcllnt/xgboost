@@ -2,6 +2,9 @@
  * Copyright 2020-2022 by XGBoost contributors
  */
 #include <gtest/gtest.h>
+
+#include <thrust/device_vector.h>
+
 #include "../../../../src/tree/gpu_hist/evaluate_splits.cuh"
 #include "../../helpers.h"
 #include "../../histogram_helpers.h"

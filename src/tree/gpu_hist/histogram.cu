@@ -3,6 +3,9 @@
  */
 #include <thrust/reduce.h>
 #include <thrust/iterator/transform_iterator.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/functional.h>
 #include <algorithm>
 #include <ctgmath>
 #include <limits>

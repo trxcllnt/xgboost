@@ -4,6 +4,11 @@
  */
 #ifndef XGBOOST_DATA_DEVICE_ADAPTER_H_
 #define XGBOOST_DATA_DEVICE_ADAPTER_H_
+
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/functional.h>
+
 #include <limits>
 #include <memory>
 #include <string>

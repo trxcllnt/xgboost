@@ -3,6 +3,8 @@
 #include <xgboost/data.h>
 #include <xgboost/json.h>
 #include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/sequence.h>
 
 #include <memory>
 #include "../../../src/common/bitfield.h"

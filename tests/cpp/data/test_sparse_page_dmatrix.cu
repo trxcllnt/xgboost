@@ -1,6 +1,10 @@
 // Copyright by Contributors
 
 #include <dmlc/filesystem.h>
+
+#include <thrust/copy.h>
+#include <thrust/device_vector.h>
+
 #include "../helpers.h"
 #include "../../../src/common/compressed_iterator.h"
 #include "../../../src/data/ellpack_page.cuh"

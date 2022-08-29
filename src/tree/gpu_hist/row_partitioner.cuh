@@ -2,6 +2,9 @@
  * Copyright 2017-2019 XGBoost contributors
  */
 #pragma once
+
+#include <thrust/fill.h>
+
 #include "xgboost/base.h"
 #include "../../common/device_helpers.cuh"
 

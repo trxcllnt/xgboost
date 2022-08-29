@@ -3,6 +3,9 @@
  */
 #include <gtest/gtest.h>
 
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
+
 #include "../helpers.h"
 #include "../../../src/data/iterative_device_dmatrix.h"
 #include "../../../src/data/ellpack_page.cuh"

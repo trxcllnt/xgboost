@@ -1,6 +1,10 @@
 /*!
  * Copyright 2020 XGBoost contributors
  */
+
+#include <thrust/execution_policy.h>
+#include <thrust/reduce.h>
+
 #include <memory>
 #include <type_traits>
 #include <algorithm>

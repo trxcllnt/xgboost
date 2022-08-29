@@ -4,6 +4,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/fill.h>
+#include <thrust/functional.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/reduce.h>
+#include <thrust/sort.h>
 #include <vector>
 #include <xgboost/base.h>
 #include "../../../src/common/device_helpers.cuh"

@@ -1,4 +1,7 @@
 #include <gtest/gtest.h>
+
+#include <thrust/copy.h>
+
 #include <vector>
 
 #include "../../../../src/common/categorical.h"

@@ -3,6 +3,8 @@
  */
 #include <gtest/gtest.h>
 
+#include <thrust/device_vector.h>
+
 #include "../../../src/common/linalg_op.cuh"
 #include "xgboost/generic_parameters.h"
 #include "xgboost/linalg.h"

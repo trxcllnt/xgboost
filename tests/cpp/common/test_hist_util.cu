@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <thrust/device_vector.h>
+#include <thrust/copy.h>
+#include <thrust/sort.h>
+#include <thrust/unique.h>
 
 #include <xgboost/data.h>
 #include <xgboost/c_api.h>
