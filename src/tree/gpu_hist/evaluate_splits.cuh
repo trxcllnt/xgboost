@@ -4,6 +4,7 @@
 #ifndef EVALUATE_SPLITS_CUH_
 #define EVALUATE_SPLITS_CUH_
 #include <thrust/system/cuda/experimental/pinned_allocator.h>
+#include <thrust/tuple.h>
 #include <xgboost/span.h>
 
 #include "../../common/categorical.h"

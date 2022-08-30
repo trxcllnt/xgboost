@@ -1,6 +1,10 @@
 #ifndef XGBOOST_COMMON_QUANTILE_CUH_
 #define XGBOOST_COMMON_QUANTILE_CUH_
 
+#include <thrust/execution_policy.h>
+#include <thrust/functional.h>
+#include <thrust/logical.h>
+
 #include <memory>
 
 #include "xgboost/span.h"

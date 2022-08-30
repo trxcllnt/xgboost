@@ -4,6 +4,13 @@
  * \file data.cu
  * \brief Handles setting metainfo from array interface.
  */
+
+#include <thrust/copy.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/logical.h>
+#include <thrust/scan.h>
+
 #include "xgboost/data.h"
 #include "xgboost/logging.h"
 #include "xgboost/json.h"

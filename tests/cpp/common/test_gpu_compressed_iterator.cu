@@ -2,6 +2,7 @@
 #include "../../../src/common/device_helpers.cuh"
 #include "gtest/gtest.h"
 #include <algorithm>
+#include <thrust/copy.h>
 #include <thrust/device_vector.h>
 
 namespace xgboost {

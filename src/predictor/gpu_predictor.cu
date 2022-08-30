@@ -6,6 +6,12 @@
 #include <thrust/device_vector.h>
 #include <thrust/fill.h>
 #include <thrust/host_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/logical.h>
+#include <thrust/scan.h>
+#include <thrust/swap.h>
 #include <GPUTreeShap/gpu_treeshap.h>
 #include <memory>
 
