@@ -1,6 +1,7 @@
 """Copyright 2019-2022 XGBoost contributors"""
 from pathlib import Path
 import pickle
+import socket
 import testing as tm
 import pytest
 import xgboost as xgb
@@ -110,9 +111,10 @@ def make_categorical(
 
 
 def generate_array(
-        with_weights: bool = False
-) -> Tuple[xgb.dask._DaskCollection, xgb.dask._DaskCollection,
-           Optional[xgb.dask._DaskCollection]]:
+    with_weights: bool = False,
+) -> Tuple[
+    xgb.dask._DaskCollection, xgb.dask._DaskCollection, Optional[xgb.dask._DaskCollection]
+]:
     chunk_size = 20
     rng = da.random.RandomState(1994)
     X = rng.random_sample((kRows, kCols), chunks=(chunk_size, -1))
@@ -1189,6 +1191,50 @@ def test_dask_iteration_range(client: "Client"):
 
 
 class TestWithDask:
+    def test_dmatrix_binary(self, client: "Client") -> None:
+        def save_dmatrix(rabit_args: List[bytes], tmpdir: str) -> None:
+            with xgb.dask.RabitContext(rabit_args):
+                rank = xgb.rabit.get_rank()
+                X, y = tm.make_categorical(100, 4, 4, False)
+                Xy = xgb.DMatrix(X, y, enable_categorical=True)
+                path = os.path.join(tmpdir, f"{rank}.bin")
+                Xy.save_binary(path)
+
+        def load_dmatrix(rabit_args: List[bytes], tmpdir: str) -> None:
+            with xgb.dask.RabitContext(rabit_args):
+                rank = xgb.rabit.get_rank()
+                path = os.path.join(tmpdir, f"{rank}.bin")
+                Xy = xgb.DMatrix(path)
+                assert Xy.num_row() == 100
+                assert Xy.num_col() == 4
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workers = _get_client_workers(client)
+            rabit_args = client.sync(
+                xgb.dask._get_rabit_args, len(workers), None, client
+            )
+            futures = []
+            for w in workers:
+                # same argument for each worker, must set pure to False otherwise dask
+                # will try to reuse the result from the first worker and hang waiting
+                # for it.
+                f = client.submit(
+                    save_dmatrix, rabit_args, tmpdir, workers=[w], pure=False
+                )
+                futures.append(f)
+            client.gather(futures)
+
+            rabit_args = client.sync(
+                xgb.dask._get_rabit_args, len(workers), None, client
+            )
+            futures = []
+            for w in workers:
+                f = client.submit(
+                    load_dmatrix, rabit_args, tmpdir, workers=[w], pure=False
+                )
+                futures.append(f)
+            client.gather(futures)
+
     @pytest.mark.parametrize('config_key,config_value', [('verbosity', 0), ('use_rmm', True)])
     def test_global_config(
             self,
@@ -1240,11 +1286,11 @@ class TestWithDask:
         os.remove(after_fname)
 
         with dask.config.set({'xgboost.foo': "bar"}):
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match=r"Unknown configuration.*"):
                 xgb.dask.train(client, {}, dtrain, num_boost_round=4)
 
-        with dask.config.set({'xgboost.scheduler_address': "127.0.0.1:22"}):
-            with pytest.raises(PermissionError):
+        with dask.config.set({'xgboost.scheduler_address': "127.0.0.1:foo"}):
+            with pytest.raises(socket.gaierror, match=r".*not known.*"):
                 xgb.dask.train(client, {}, dtrain, num_boost_round=1)
 
     def run_updater_test(
