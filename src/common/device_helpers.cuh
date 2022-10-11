@@ -790,13 +790,16 @@ class AllReducer {
    */
 
   void AllReduceSum(const double *sendbuff, double *recvbuff, int count) {
+    if (rabit::GetWorldSize() == 1) {
+      return;
+    }
 #ifdef XGBOOST_USE_NCCL
     CHECK(initialised_);
     dh::safe_cuda(cudaSetDevice(device_ordinal_));
     dh::safe_nccl(ncclAllReduce(sendbuff, recvbuff, count, ncclDouble, ncclSum, comm_, stream_));
     allreduce_bytes_ += count * sizeof(double);
     allreduce_calls_ += 1;
-#endif
+#endif  // XGBOOST_USE_NCCL
   }
 
   /**
@@ -811,9 +814,12 @@ class AllReducer {
 
   void AllGather(uint32_t const* data, size_t length,
                  dh::caching_device_vector<uint32_t>* recvbuf) {
+    size_t world = rabit::GetWorldSize();
+    if (world == 1) {
+      return;
+    }
 #ifdef XGBOOST_USE_NCCL
     CHECK(initialised_);
-    size_t world = rabit::GetWorldSize();
     recvbuf->resize(length * world);
     safe_nccl(ncclAllGather(data, recvbuf->data().get(), length, ncclUint32,
                             comm_, stream_));
@@ -828,9 +834,11 @@ class AllReducer {
    * \param recvbuff                The recvbuff.
    * \param count                   Number of elements.
    */
-
   void AllReduceSum(const float *sendbuff, float *recvbuff, int count) {
 #ifdef XGBOOST_USE_NCCL
+    if (rabit::GetWorldSize() == 1) {
+      return;
+    }
     CHECK(initialised_);
     dh::safe_cuda(cudaSetDevice(device_ordinal_));
     dh::safe_nccl(ncclAllReduce(sendbuff, recvbuff, count, ncclFloat, ncclSum, comm_, stream_));
@@ -851,6 +859,9 @@ class AllReducer {
 
   void AllReduceSum(const int64_t *sendbuff, int64_t *recvbuff, int count) {
 #ifdef XGBOOST_USE_NCCL
+    if (rabit::GetWorldSize() == 1) {
+      return;
+    }
     CHECK(initialised_);
 
     dh::safe_cuda(cudaSetDevice(device_ordinal_));
@@ -860,6 +871,9 @@ class AllReducer {
 
   void AllReduceSum(const uint32_t *sendbuff, uint32_t *recvbuff, int count) {
 #ifdef XGBOOST_USE_NCCL
+    if (rabit::GetWorldSize() == 1) {
+      return;
+    }
     CHECK(initialised_);
 
     dh::safe_cuda(cudaSetDevice(device_ordinal_));
@@ -868,6 +882,9 @@ class AllReducer {
   }
 
   void AllReduceSum(const uint64_t *sendbuff, uint64_t *recvbuff, int count) {
+    if (rabit::GetWorldSize() == 1) {
+      return;
+    }
 #ifdef XGBOOST_USE_NCCL
     CHECK(initialised_);
 
@@ -882,12 +899,15 @@ class AllReducer {
             std::enable_if_t<std::is_same<size_t, T>::value &&
                              !std::is_same<size_t, unsigned long long>::value>  // NOLINT
                 * = nullptr>
-  void AllReduceSum(const T *sendbuff, T *recvbuff, int count) { // NOLINT
+  void AllReduceSum(const T *sendbuff, T *recvbuff, int count) {  // NOLINT
 #ifdef XGBOOST_USE_NCCL
+    if (rabit::GetWorldSize() == 1) {
+      return;
+    }
     CHECK(initialised_);
 
     dh::safe_cuda(cudaSetDevice(device_ordinal_));
-    static_assert(sizeof(unsigned long long) == sizeof(uint64_t), ""); // NOLINT
+    static_assert(sizeof(unsigned long long) == sizeof(uint64_t), "");  // NOLINT
     dh::safe_nccl(ncclAllReduce(sendbuff, recvbuff, count, ncclUint64, ncclSum, comm_, stream_));
 #endif
   }
