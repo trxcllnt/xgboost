@@ -3,11 +3,11 @@
  */
 #ifndef EVALUATE_SPLITS_CUH_
 #define EVALUATE_SPLITS_CUH_
-#include <thrust/system/cuda/experimental/pinned_allocator.h>
 #include <thrust/tuple.h>
 #include <xgboost/span.h>
 
 #include "../../common/categorical.h"
+#include "../../common/cuda_pinned_allocator.h"
 #include "../split_evaluator.h"
 #include "../updater_gpu_common.cuh"
 #include "expand_entry.cuh"
@@ -40,7 +40,7 @@ template <typename GradientSumT>
 class GPUHistEvaluator {
   using CatST = common::CatBitField::value_type;  // categorical storage type
   // use pinned memory to stage the categories, used for sort based splits.
-  using Alloc = thrust::system::cuda::experimental::pinned_allocator<CatST>;
+  using Alloc = xgboost::common::cuda::pinned_allocator<CatST>;
 
  private:
   TreeEvaluator tree_evaluator_;
