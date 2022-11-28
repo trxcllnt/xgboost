@@ -1,4 +1,7 @@
 #include <gtest/gtest.h>
+
+#include <thrust/copy.h>
+
 #include "../../../src/common/ranking_utils.cuh"
 #include "../../../src/common/device_helpers.cuh"
 

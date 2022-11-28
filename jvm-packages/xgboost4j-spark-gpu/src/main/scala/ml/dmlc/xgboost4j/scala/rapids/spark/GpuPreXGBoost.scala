@@ -170,7 +170,7 @@ object GpuPreXGBoost extends PreXGBoostProvider {
     xgbExecParams: XGBoostExecutionParams =>
       val dataMap = prepareInputData(trainingData, evalDataMap, xgbExecParams.numWorkers,
         xgbExecParams.cacheTrainingSet)
-      (buildRDDWatches(dataMap, xgbExecParams, evalDataMap.isEmpty), None)
+      (true, buildRDDWatches(dataMap, xgbExecParams, evalDataMap.isEmpty), None)
   }
 
   /**

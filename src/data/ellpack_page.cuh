@@ -12,6 +12,7 @@
 #include "../common/hist_util.h"
 #include "../common/categorical.h"
 #include <thrust/binary_search.h>
+#include <thrust/execution_policy.h>
 
 namespace xgboost {
 /** \brief Struct for accessing and manipulating an ELLPACK matrix on the

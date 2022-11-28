@@ -1,4 +1,18 @@
 #include <gtest/gtest.h>
+
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/fill.h>
+#include <thrust/host_vector.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/scan.h>
+#include <thrust/sort.h>
+#include <thrust/transform.h>
+#include <thrust/tuple.h>
+
 #include "test_quantile.h"
 #include "../helpers.h"
 #include "../../../src/collective/device_communicator.cuh"

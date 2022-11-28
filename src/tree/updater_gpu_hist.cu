@@ -3,6 +3,8 @@
  */
 #include <thrust/copy.h>
 #include <thrust/reduce.h>
+#include <thrust/execution_policy.h>
+#include <thrust/functional.h>
 #include <xgboost/tree_updater.h>
 #include <algorithm>
 #include <cmath>

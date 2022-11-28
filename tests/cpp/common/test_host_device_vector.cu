@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <thrust/equal.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/transform.h>
 
 #include "../../../src/common/device_helpers.cuh"
 #include <xgboost/host_device_vector.h>

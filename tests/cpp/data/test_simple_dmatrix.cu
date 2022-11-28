@@ -2,6 +2,7 @@
 #include <xgboost/data.h>
 #include "../../../src/data/simple_dmatrix.h"
 
+#include <thrust/device_vector.h>
 #include <thrust/sequence.h>
 #include "../../../src/data/device_adapter.cuh"
 #include "../helpers.h"

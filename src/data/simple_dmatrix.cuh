@@ -8,6 +8,9 @@
 #include <thrust/copy.h>
 #include <thrust/scan.h>
 #include <thrust/execution_policy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 #include "device_adapter.cuh"
 #include "../common/device_helpers.cuh"
 

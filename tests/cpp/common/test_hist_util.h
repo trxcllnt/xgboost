@@ -17,6 +17,9 @@
 
 #ifdef __CUDACC__
 #include <xgboost/json.h>
+
+#include <thrust/device_vector.h>
+
 #include "../../../src/data/device_adapter.cuh"
 #endif  // __CUDACC__
 

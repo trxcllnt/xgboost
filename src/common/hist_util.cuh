@@ -8,6 +8,13 @@
 #define COMMON_HIST_UTIL_CUH_
 
 #include <thrust/host_vector.h>
+#include <thrust/copy.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
+#include <thrust/iterator/constant_iterator.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/scan.h>
+#include <thrust/sort.h>
 
 #include "hist_util.h"
 #include "quantile.cuh"

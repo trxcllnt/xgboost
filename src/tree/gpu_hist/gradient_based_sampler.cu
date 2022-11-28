@@ -4,6 +4,16 @@
 #include <thrust/functional.h>
 #include <thrust/random.h>
 #include <thrust/transform.h>
+#include <thrust/copy.h>
+#include <thrust/count.h>
+#include <thrust/device_ptr.h>
+#include <thrust/distance.h>
+#include <thrust/extrema.h>
+#include <thrust/fill.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/replace.h>
+#include <thrust/scan.h>
+#include <thrust/sort.h>
 #include <xgboost/host_device_vector.h>
 #include <xgboost/logging.h>
 

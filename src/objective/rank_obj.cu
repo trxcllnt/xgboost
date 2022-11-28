@@ -21,6 +21,16 @@
 #include <thrust/iterator/discard_iterator.h>
 #include <thrust/random/uniform_int_distribution.h>
 #include <thrust/random/linear_congruential_engine.h>
+#include <thrust/binary_search.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
+#include <thrust/functional.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
+#include <thrust/reduce.h>
+#include <thrust/scan.h>
+#include <thrust/swap.h>
+#include <thrust/transform.h>
 
 #include <cub/util_allocator.cuh>
 

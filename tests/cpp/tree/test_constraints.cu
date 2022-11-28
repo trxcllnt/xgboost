@@ -3,6 +3,7 @@
  */
 #include <gtest/gtest.h>
 #include <thrust/copy.h>
+#include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <cinttypes>
 #include <string>

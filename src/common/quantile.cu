@@ -7,6 +7,17 @@
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/transform_scan.h>
 #include <thrust/unique.h>
+#include <thrust/copy.h>
+#include <thrust/functional.h>
+#include <thrust/iterator/constant_iterator.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/reverse_iterator.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/merge.h>
+#include <thrust/reduce.h>
+#include <thrust/scan.h>
+#include <thrust/transform.h>
+#include <thrust/tuple.h>
 
 #include <limits>  // std::numeric_limits
 #include <memory>

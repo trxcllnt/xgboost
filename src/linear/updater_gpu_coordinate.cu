@@ -5,6 +5,9 @@
 
 #include <thrust/execution_policy.h>
 #include <thrust/inner_product.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/permutation_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 #include <xgboost/data.h>
 #include <xgboost/linear_updater.h>
 #include "xgboost/span.h"

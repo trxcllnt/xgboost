@@ -38,6 +38,7 @@ import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.ml.linalg.xgboost.XGBoostSchemaUtils
 import org.apache.spark.sql.types.{ArrayType, FloatType, StructField, StructType}
 import org.apache.spark.storage.StorageLevel
 
@@ -170,12 +171,12 @@ object PreXGBoost extends PreXGBoostProvider {
           val cachedRDD = if (xgbExecParams.cacheTrainingSet) {
             Some(trainingData.persist(StorageLevel.MEMORY_AND_DISK))
           } else None
-          (trainForRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
+          (false, trainForRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
         case Right(trainingData) =>
           val cachedRDD = if (xgbExecParams.cacheTrainingSet) {
             Some(trainingData.persist(StorageLevel.MEMORY_AND_DISK))
           } else None
-          (trainForNonRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
+          (false, trainForNonRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
       }
 
   }
@@ -330,12 +331,12 @@ object PreXGBoost extends PreXGBoostProvider {
           val cachedRDD = if (xgbExecParams.cacheTrainingSet) {
             Some(trainingData.persist(StorageLevel.MEMORY_AND_DISK))
           } else None
-          (trainForRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
+          (false, trainForRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
         case Right(trainingData) =>
           val cachedRDD = if (xgbExecParams.cacheTrainingSet) {
             Some(trainingData.persist(StorageLevel.MEMORY_AND_DISK))
           } else None
-          (trainForNonRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
+          (false, trainForNonRanking(trainingData, xgbExecParams, evalRDDMap), cachedRDD)
       }
   }
 

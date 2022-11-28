@@ -568,7 +568,6 @@ def record_batch_data_iter(data_iter: Iterator) -> Callable:
     """Data iterator used to ingest Arrow columnar record batches. We are not using
     class DataIter because it is only intended for building Device DMatrix and external
     memory DMatrix.
-
     """
     from pyarrow.cffi import ffi
 

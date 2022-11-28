@@ -6,6 +6,8 @@
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
+#include <thrust/copy.h>
+#include <thrust/memory.h>
 
 #include "../../../src/common/device_helpers.cuh"
 #include <xgboost/span.h>

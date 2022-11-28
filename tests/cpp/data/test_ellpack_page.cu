@@ -3,6 +3,9 @@
  */
 #include <xgboost/base.h>
 
+#include <thrust/device_vector.h>
+#include <thrust/copy.h>
+
 #include <utility>
 
 #include "../helpers.h"

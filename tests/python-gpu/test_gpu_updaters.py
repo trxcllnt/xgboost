@@ -137,6 +137,9 @@ class TestGPUUpdaters:
     def test_max_cat(self) -> None:
         self.cputest.run_max_cat("gpu_hist")
 
+    def test_max_cat(self) -> None:
+        self.cputest.run_max_cat("gpu_hist")
+
     def test_categorical_32_cat(self):
         '''32 hits the bound of integer bitset, so special test'''
         rows = 1000

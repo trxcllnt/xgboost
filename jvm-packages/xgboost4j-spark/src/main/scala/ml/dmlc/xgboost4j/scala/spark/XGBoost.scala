@@ -388,7 +388,7 @@ object XGBoost extends Serializable {
     }.orNull
 
     // Get the training data RDD and the cachedRDD
-    val (trainingRDD, optionalCachedRDD) = buildTrainingData(xgbExecParams)
+    val (buildDMatrixInRabit, trainingRDD, optionalCachedRDD) = buildTrainingData(xgbExecParams)
 
     try {
       // Train for every ${savingRound} rounds and save the partially completed booster

@@ -1,6 +1,10 @@
 /*!
  * Copyright 2020-2022 by XGBoost Contributors
  */
+#include <thrust/execution_policy.h>
+#include <thrust/for_each.h>
+#include <thrust/iterator/counting_iterator.h>
+
 #include <algorithm>  // std::max
 #include <vector>
 #include <limits>

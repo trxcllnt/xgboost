@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <thrust/copy.h>
 #include <thrust/device_vector.h>
+#include <thrust/fill.h>
 #include <vector>
 #include "../../../src/common/bitfield.h"
 #include "../../../src/common/device_helpers.cuh"
