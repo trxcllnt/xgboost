@@ -3,6 +3,7 @@
  */
 #ifndef EVALUATE_SPLITS_CUH_
 #define EVALUATE_SPLITS_CUH_
+#include <thrust/tuple.h>
 #include <xgboost/span.h>
 
 #include "../../common/categorical.h"
